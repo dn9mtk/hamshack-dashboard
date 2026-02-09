@@ -1,0 +1,55 @@
+---
+description: Hamshack Dashboard – UI concept and patterns to respect for all frontend changes
+alwaysApply: true
+---
+
+# Hamshack Dashboard – UI Concept
+
+When adding or changing UI (client/src, styles.css), **always follow the existing UI concept** so the app stays consistent.
+
+## Layout
+
+- **Topbar:** Callsign, locator/QTH line, tagline | Settings button, Next contest (if any), Clock (UTC, local, sun times, grayline).
+- **Main:** Sidebar (tabs + one content area) + Map. Sidebar tabs: News, Contests, DXped, Band, Space, Weather, MUF, Spots, PSK, Sat.
+- **One-page sidebar:** No separate “pages”; one tablist and one scrollable content area. Active tab decides which panel is visible.
+
+## Panel Pattern
+
+- Every panel lives in a **`.panel`** with a clear **`<h2>`** heading.
+- **Loading:** Use **`PanelLoading`** (skeleton lines).
+- **Error:** Use **`PanelError`** with message and Retry.
+- **Empty state:** Use **`.panel-empty`** (or **`.panel-empty-inline`** inside cards). Same copy style (muted, 13px).
+- **Content layout:** Prefer **`.panel-content-grid`** (display: grid, gap: 10px) for panels with filters + content.
+
+## List / Slider Pattern
+
+- **Card:** **`.news-slider-card`** (rounded, subtle border, min-height).
+- **Content link/block:** **`.news-slider-link`** (flex column, padding). Use for clickable items or static blocks.
+- **Title:** **`.news-slider-title`**; **`.news-slider-date`** for secondary text; **`.news-slider-hint`** for “Read more” style.
+- **Navigation:** **`.news-slider-nav`** with **`.news-slider-nav-row`**: prev button, **`.news-slider-counter`** (e.g. 1 / 5), next button. Use **`news-slider-btn`** for prev/next. Support arrow keys (tabIndex, onKeyDown).
+- Use this same pattern for News, Contests, DXpeditions, Spots, Satellites (one “item” at a time, optional carousel).
+
+## Filter Toggles
+
+- **Toggle group:** **`.contests-toggle`** / **`.dxpeditions-toggle`** with **`.contests-toggle-btn`** / **`.dxpeditions-toggle-btn`**. Active state: **`.active`** (blue tint). Use **role="group"** and **aria-label**.
+- **Spots:** **`.spots-filters`** with **`.spots-filter`** (label + select) and optional checkbox (e.g. Reachable). Same compact row, same background/border.
+
+## Map
+
+- **Toolbar:** **`.hf-prop-bar`** (flex, wrap). Buttons/inputs use shared styles; layer toggles can use **`.map-ctrl-btn`**.
+- **Legend:** **`.map-legend`** container, **`.map-legend-box`** per block, **`.map-legend-title`**, **`.map-legend-row`**, **`.map-legend-item`**, **`.map-legend-dot`**, **`.map-legend-label`**. Prefer these classes over inline styles for new legend content.
+
+## Theming & Focus
+
+- **Colors:** Use CSS variables (--bg, --panel, --text, --muted, --line). Accent blue **rgba(77,171,247,…)** for active/links.
+- **Focus:** Every interactive element must have a clear **:focus-visible** style (outline or box-shadow). Sidebar tabs, buttons, selects, map controls.
+- **Accessibility:** **aria-label** on icon-only or ambiguous controls. **aria-pressed** for toggle buttons. **role="tablist"** / **role="tab"** for sidebar.
+
+## Consistency Rules
+
+1. **No one-off layouts:** New panels use the same card/slider or filter+content pattern as existing ones.
+2. **Centralise styles:** Prefer classes in **styles.css** over inline styles. Reuse **.panel-empty**, **.news-slider-***, **.map-legend-***, etc.
+3. **Callsigns:** Use **CallsignLink** (or link to QRZ) for callsigns so behaviour is consistent.
+4. **English:** All user-facing strings in English.
+
+When in doubt, mirror an existing panel (e.g. Contests or DXpeditions) for structure and classes, then adapt content.

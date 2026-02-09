@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Environment and secrets
+.env
+!.env.example
+server/.env
+
+# Build outputs
+client/dist/
+dist-electron/
+
+# Local / generated data (keep .env.example and server data except below)
+server/data/config.json
+server/data/repeaters.json
+
+# OS and editor
+.DS_Store
+Thumbs.db
+*.log

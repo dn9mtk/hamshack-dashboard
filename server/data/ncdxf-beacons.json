@@ -1,0 +1,20 @@
+[
+  { "call": "4U1UN", "grid": "FN30as", "location": "New York, USA" },
+  { "call": "VE8AT", "grid": "CP38gh", "location": "Inuvik, Canada" },
+  { "call": "W6WX", "grid": "CM97bd", "location": "Mt. Umunhum, USA" },
+  { "call": "KH6RS", "grid": "BL10ts", "location": "Maui, Hawaii" },
+  { "call": "ZL6B", "grid": "RE78tw", "location": "Masterton, New Zealand" },
+  { "call": "VK6RBP", "grid": "OF87av", "location": "Rolystone, Australia" },
+  { "call": "JA2IGY", "grid": "PM84jk", "location": "Mt. Asama, Japan" },
+  { "call": "RR9O", "grid": "NO14kx", "location": "Novosibirsk, Russia" },
+  { "call": "VR2B", "grid": "OL72bg", "location": "Hong Kong" },
+  { "call": "4S7B", "grid": "MJ96wv", "location": "Colombo, Sri Lanka" },
+  { "call": "ZS6DN", "grid": "KG33xi", "location": "Pretoria, South Africa" },
+  { "call": "5Z4B", "grid": "KI88hr", "location": "Kikuyu, Kenya" },
+  { "call": "4X6TU", "grid": "KM72jb", "location": "Tel Aviv, Israel" },
+  { "call": "OH2B", "grid": "KP20eh", "location": "Lohja, Finland" },
+  { "call": "CS3B", "grid": "IM12jt", "location": "São Jorge, Azores" },
+  { "call": "LU4AA", "grid": "GF05tj", "location": "Buenos Aires, Argentina" },
+  { "call": "OA4B", "grid": "FH17mw", "location": "Lima, Peru" },
+  { "call": "YV5B", "grid": "FJ69cc", "location": "Caracas, Venezuela" }
+]
