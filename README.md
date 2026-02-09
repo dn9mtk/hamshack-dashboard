@@ -214,3 +214,26 @@ This will guide you through configuring your `.env` file interactively.
 - The dashboard now derives simple band readiness (10/15/20/40m) from public space-weather feeds (Kp, SFI, solar wind). No extra config is needed.
 - Alert flags (geomagnetic disturbance, radio blackout risk, solar wind southward Bz) are shown under Space Weather when applicable.
 - These are quick heuristics, not full propagation predictions.
+
+## Publish to GitHub
+
+The project is already a Git repo (branch `main`). To push it to GitHub:
+
+1. **Create a new repository** on [github.com](https://github.com/new):
+   - Repository name: e.g. `hamshack-dashboard`
+   - Visibility: Public or Private
+   - Do **not** add a README, .gitignore, or license (they already exist locally).
+
+2. **Add the remote and push** (replace `YOUR_USERNAME` and `YOUR_REPO` with your GitHub user and repo name):
+
+```bash
+git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
+git push -u origin main
+```
+
+If you use SSH:
+
+```bash
+git remote add origin git@github.com:YOUR_USERNAME/YOUR_REPO.git
+git push -u origin main
+```
