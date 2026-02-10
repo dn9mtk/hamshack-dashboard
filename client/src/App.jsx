@@ -49,6 +49,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dxpeditionsFilter, setDxpeditionsFilter] = useState("all"); // "all" | "active" | "upcoming"
   const [repeatersBandFilter, setRepeatersBandFilter] = useState("2m"); // "2m" | "70cm" | "10m"
+  const [selectedRepeater, setSelectedRepeater] = useState(null);
+  const [focusedRepeater, setFocusedRepeater] = useState(null);
   const [sunData, setSunData] = useState(null);
   const [sidebarTab, setSidebarTab] = useState(getInitialTab);
   const [rigFreq, setRigFreq] = useState(loadRigFreq);
@@ -193,6 +195,13 @@ export default function App() {
                 <RepeatersPanel
                   band={repeatersBandFilter}
                   onBandChange={setRepeatersBandFilter}
+                  selectedRepeater={selectedRepeater}
+                  onFocusRepeater={(rep) => {
+                    if (rep?.band) {
+                      setRepeatersBandFilter(rep.band);
+                    }
+                    setFocusedRepeater(rep);
+                  }}
                 />
               </div>
             )}
@@ -257,6 +266,14 @@ export default function App() {
             dxpeditionsFilter={dxpeditionsFilter}
             repeatersBandFilter={repeatersBandFilter}
             onRepeatersBandChange={setRepeatersBandFilter}
+            focusedRepeater={focusedRepeater}
+            onSelectRepeater={(rep) => {
+              if (rep?.band) {
+                setRepeatersBandFilter(rep.band);
+              }
+              setSelectedRepeater(rep || null);
+              setSidebarTabAndPersist("repeaters");
+            }}
           />
         </section>
       </main>

@@ -93,6 +93,8 @@ async function run() {
       lon = null;
       if (city) citiesToGeocode.add(city);
     }
+    // Keep a compact normalized view *and* attach the full original row for extra metadata
+    // (tone, mode, access, notes, etc.) so the frontend can surface more details later.
     items.push({
       id: String(row.rpt_id ?? row.id ?? `${row.rpt_callsign || row.callsign || ""}-${freq}`).trim() || `r-${items.length}`,
       callsign: String(row.rpt_callsign ?? row.callsign ?? row.Callsign ?? "").trim(),
@@ -101,7 +103,8 @@ async function run() {
       city: city || null,
       lat: Number.isFinite(lat) ? lat : null,
       lon: Number.isFinite(lon) ? lon : null,
-      band
+      band,
+      raw: row
     });
   }
   console.log(`Loaded ${items.length} repeaters. Unique cities to geocode: ${citiesToGeocode.size}`);

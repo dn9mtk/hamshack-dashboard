@@ -178,12 +178,39 @@ function pathForecastPopupHtml(data) {
         `<tr><td style="padding:4px 8px 4px 0;">${escapeHtml(b.name)}</td><td style="padding:4px 0;text-align:right;font-weight:700;">${escapeHtml(String(b.reliability))}%</td></tr>`
     )
     .join("");
+  const elev = data.elevationProfile;
+  let elevHtml = "";
+  if (elev && Array.isArray(elev.samples) && elev.samples.length >= 2) {
+    const minEl = typeof elev.minElevation === "number" ? elev.minElevation : 0;
+    const maxEl = typeof elev.maxElevation === "number" ? elev.maxElevation : minEl + 1;
+    const span = Math.max(1, maxEl - minEl);
+    const lastDist = elev.samples[elev.samples.length - 1].distKm || 1;
+    const pts = elev.samples.map((s) => {
+      const x = lastDist > 0 ? (s.distKm / lastDist) * 100 : 0;
+      const y = 100 - ((s.elevation - minEl) / span) * 100;
+      return { x, y };
+    });
+    const linePoints = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    elevHtml = `
+      <div class="path-forecast-elev">
+        <div class="path-forecast-elev-title">Elevation profile (QTH → DX)</div>
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="path-forecast-elev-svg">
+          <polyline points="${linePoints}" class="path-forecast-elev-line" />
+        </svg>
+        <div class="path-forecast-elev-meta">
+          <span>min ${Math.round(minEl)} m</span>
+          <span>max ${Math.round(maxEl)} m</span>
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="path-forecast-popup">
       <div class="path-forecast-popup-title">Path Forecast</div>
       <div class="path-forecast-popup-route">${escapeHtml(data.from?.locator || "—")} → ${escapeHtml(String(toStr))}</div>
       <div class="path-forecast-popup-meta">${escapeHtml(String(data.distanceKm ?? "—"))} km · MUF ${escapeHtml(String(data.mufPath ?? "—"))} MHz</div>
       <table class="path-forecast-popup-bands"><tbody>${bands}</tbody></table>
+      ${elevHtml}
     </div>
   `;
 }
@@ -194,7 +221,21 @@ const REPEATER_BANDS = [
   { key: "10m", label: "10 m" }
 ];
 
-export default function MapPanel({ dxpeditionsFilter = "all", repeatersBandFilter = "2m", onRepeatersBandChange }) {
+// Repeater marker colors per band (2m = green, 70cm = blue, 10m = purple)
+const REPEATER_BAND_COLORS = {
+  "2m": "#37b24d",
+  "70cm": "#339af0",
+  "10m": "#cc5de8"
+};
+const REPEATER_DEFAULT_COLOR = "#868e96";
+
+export default function MapPanel({
+  dxpeditionsFilter = "all",
+  repeatersBandFilter = "2m",
+  onRepeatersBandChange,
+  onSelectRepeater,
+  focusedRepeater
+}) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
   const pathTargetMarkerRef = useRef(null);
@@ -425,10 +466,10 @@ export default function MapPanel({ dxpeditionsFilter = "all", repeatersBandFilte
           list = list.filter((x) => x.band === repeatersBandFilter);
         }
         layer.clearLayers();
-        const color = "#e67700";
         list.forEach((x) => {
           const lat = Number(x.lat);
           const lon = Number(x.lon);
+          const color = REPEATER_BAND_COLORS[x.band] || REPEATER_DEFAULT_COLOR;
           const marker = L.circleMarker([lat, lon], {
             radius: 5,
             weight: 2,
@@ -446,6 +487,12 @@ export default function MapPanel({ dxpeditionsFilter = "all", repeatersBandFilte
             `<div class="dxped-popup-dates">${escapeHtml(x.band || "")}</div>` +
             `</div>`;
           marker.bindPopup(popupContent);
+
+          // When clicking a repeater marker, notify the app so the sidebar
+          // \"Repeater\" panel can select the corresponding entry.
+          if (onSelectRepeater) {
+            marker.on("click", () => onSelectRepeater(x));
+          }
         });
       } catch (err) {
         console.warn("Repeaters layer:", err);
@@ -463,6 +510,52 @@ export default function MapPanel({ dxpeditionsFilter = "all", repeatersBandFilte
     return () => { alive = false; };
   }, [repeatersLayerOn, repeatersBandFilter, mapReady]);
 
+  // Center and highlight a focused repeater (from sidebar focus button)
+  useEffect(() => {
+    if (!focusedRepeater || !mapRef.current) return;
+    if (!repeatersLayerOn) return; // respect user toggle; don't force layer ON
+
+    const { lat, lon } = focusedRepeater;
+    const latNum = Number(lat);
+    const lonNum = Number(lon);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return;
+
+    const map = mapRef.current;
+    const target = L.latLng(latNum, lonNum);
+
+    // Zoom näher ran (stärkerer Zoom als normale Ansicht).
+    const zoom = Math.max(map.getZoom(), 8);
+    map.setView(target, zoom, { animate: true });
+
+    // Wegen Header + Toolbar liegt die „visuelle“ Mitte höher.
+    // Verschiebe die Karte daher ein Stück nach oben, sodass
+    // der Repeater näher an der geometrischen Mitte sichtbar ist.
+    map.panBy([0, -80], { animate: true });
+
+    const layer = repeaterLayerRef.current;
+    if (!layer || typeof layer.eachLayer !== "function") return;
+
+    // Alle Repeater-Marker in Default-Style zurücksetzen und den gewählten hervorheben.
+    layer.eachLayer((marker) => {
+      if (!marker || !marker.getLatLng || !marker.setStyle) return;
+      const p = marker.getLatLng();
+      const isMatch =
+        Math.abs(p.lat - latNum) < 0.0001 &&
+        Math.abs(p.lng - lonNum) < 0.0001;
+
+      // Default-Style
+      const baseStyle = { radius: 5, weight: 2 };
+
+      if (isMatch) {
+        marker.setStyle({ ...baseStyle, radius: 8, weight: 3 });
+        if (marker.openPopup) marker.openPopup();
+        if (marker.bringToFront) marker.bringToFront();
+      } else {
+        marker.setStyle(baseStyle);
+      }
+    });
+  }, [focusedRepeater, repeatersLayerOn, mapReady]);
+
   useEffect(() => {
     if (mapRef.current) return;
     const el = elRef.current;
@@ -475,7 +568,7 @@ export default function MapPanel({ dxpeditionsFilter = "all", repeatersBandFilte
         zoomControl: true,
         attributionControl: true,
         minZoom: 2,
-        maxZoom: 8,
+        maxZoom: 10,
         maxBounds: [[-90, -180], [90, 180]],
         maxBoundsViscosity: 1
       }).setView([25, 0], 2);
@@ -1474,13 +1567,21 @@ export default function MapPanel({ dxpeditionsFilter = "all", repeatersBandFilte
               </div>
             )}
             {repeatersLayerOn && (
-              <div className="map-legend-box" style={{ border: "2px solid rgba(230,119,0,0.5)" }}>
+              <div className="map-legend-box" style={{ border: "2px solid rgba(255,255,255,0.35)" }}>
                 <div className="map-legend-title">Repeater (DE)</div>
                 <div className="map-legend-row">
-                  <span className="map-legend-item">
-                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#e67700", borderColor: "#e67700" }} />
-                    <span className="map-legend-label">2 m / 70 cm / 10 m</span>
-                  </span>
+                  {REPEATER_BANDS.map(({ key, label }) => (
+                    <span key={key} className="map-legend-item">
+                      <span
+                        className="map-legend-dot map-legend-dot--circle"
+                        style={{
+                          background: REPEATER_BAND_COLORS[key] || REPEATER_DEFAULT_COLOR,
+                          borderColor: REPEATER_BAND_COLORS[key] || REPEATER_DEFAULT_COLOR
+                        }}
+                      />
+                      <span className="map-legend-label">{label}</span>
+                    </span>
+                  ))}
                 </div>
               </div>
             )}

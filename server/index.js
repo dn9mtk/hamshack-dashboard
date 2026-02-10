@@ -740,6 +740,52 @@ app.get("/api/propagation/path", async (req, res) => {
       const ratio = f > 0 ? muf / f : 0;
       return { name: b.name, freq: b.freq, reliability, mufRatio: Number.isFinite(ratio) ? Math.round(ratio * 100) / 100 : 0 };
     });
+    // Elevation profile (HeyWhatsThat-style) using Open-Elevation.
+    let elevationProfile = null;
+    try {
+      const SAMPLES = 48;
+      const locs = [];
+      for (let i = 0; i <= SAMPLES; i++) {
+        const t = i / SAMPLES;
+        const lat = fromQ.lat + (toLat - fromQ.lat) * t;
+        const lon = fromQ.lon + (toLon - fromQ.lon) * t;
+        locs.push(`${lat},${lon}`);
+      }
+      const url = `https://api.open-elevation.com/api/v1/lookup?locations=${encodeURIComponent(
+        locs.join("|")
+      )}`;
+      const er = await fetch(url);
+      if (er.ok) {
+        const ej = await er.json();
+        const results = Array.isArray(ej?.results) ? ej.results : [];
+        if (results.length) {
+          let maxElev = -Infinity;
+          let minElev = Infinity;
+          const samples = results.map((r, idx) => {
+            const lat = r.latitude;
+            const lon = r.longitude;
+            const elevation = r.elevation;
+            const distFromStartKm =
+              idx === 0
+                ? 0
+                : distanceKm(results[0].latitude, results[0].longitude, lat, lon);
+            if (Number.isFinite(elevation)) {
+              maxElev = Math.max(maxElev, elevation);
+              minElev = Math.min(minElev, elevation);
+            }
+            return { lat, lon, elevation, distKm: distFromStartKm };
+          });
+          elevationProfile = {
+            samples,
+            minElevation: Number.isFinite(minElev) ? minElev : null,
+            maxElevation: Number.isFinite(maxElev) ? maxElev : null
+          };
+        }
+      }
+    } catch {
+      elevationProfile = null;
+    }
+
     res.json({
       from: { lat: fromQ.lat, lon: fromQ.lon, locator: CONFIG.locator },
       to: { lat: toLat, lon: toLon, grid: toGrid || null },
@@ -749,6 +795,7 @@ app.get("/api/propagation/path", async (req, res) => {
       sfi,
       kp: space.kp,
       bands,
+      elevationProfile,
       predictionType: "full"
     });
   } catch (e) {

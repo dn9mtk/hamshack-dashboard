@@ -3,7 +3,6 @@ import PanelError from "./PanelError.jsx";
 import PanelLoading from "./PanelLoading.jsx";
 
 const REPEATERBOOK_URL = "https://www.repeaterbook.com/";
-const AUTO_ADVANCE_MS = 12000;
 
 export const REPEATER_BAND_2M = "2m";
 export const REPEATER_BAND_70CM = "70cm";
@@ -29,12 +28,13 @@ function formatOffset(offset) {
   return `${n.toFixed(2)}`;
 }
 
-export default function RepeatersPanel({ band: bandProp, onBandChange }) {
+export default function RepeatersPanel({ band: bandProp, onBandChange, selectedRepeater, onFocusRepeater }) {
   const [items, setItems] = useState([]);
   const [err, setErr] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [index, setIndex] = useState(0);
   const [bandLocal, setBandLocal] = useState(REPEATER_BAND_2M);
+  const [query, setQuery] = useState("");
   const band = bandProp ?? bandLocal;
   const setBand = onBandChange ?? setBandLocal;
 
@@ -60,7 +60,59 @@ export default function RepeatersPanel({ band: bandProp, onBandChange }) {
     return () => clearInterval(id);
   }, []);
 
-  const filteredItems = items.filter((r) => r.band === band);
+  const search = query.trim().toLowerCase();
+
+  // When there is no search query, restrict to current band.
+  // When a search query is present, search across *all* bands.
+  const bandItems = search ? items : items.filter((r) => r.band === band);
+  const filteredItems = bandItems.filter((r) => {
+    if (!search) return true;
+    const parts = [];
+    const FIELDS = ["callsign", "city", "band", "mode", "notes", "remark", "qth", "locator"];
+    for (const key of FIELDS) {
+      const v = r[key];
+      if (v != null && v !== "") parts.push(String(v));
+    }
+    if (r.freq != null) parts.push(String(r.freq));
+    if (r.offset != null && r.offset !== "") parts.push(String(r.offset));
+    const text = parts.join(" ").toLowerCase();
+    return text.includes(search);
+  });
+
+  // When a repeater is selected on the map, sync band and slider index in this panel.
+  // Important: this hook must be *before* any conditional return to keep the hooks
+  // order stable across all renders.
+  useEffect(() => {
+    if (!selectedRepeater || !items.length) return;
+
+    const targetBand = selectedRepeater.band || band;
+    if (!targetBand) return;
+
+    // Switch to the band of the selected repeater (if available).
+    if (selectedRepeater.band && selectedRepeater.band !== band) {
+      setBand(selectedRepeater.band);
+    }
+
+    // Clear search so the selected repeater is not hidden by a previous query.
+    if (query !== "") {
+      setQuery("");
+    }
+
+    // Try to move the slider to the matching repeater within the current band.
+    setIndex((current) => {
+      const bandList = items.filter((x) => x.band === targetBand);
+      if (!bandList.length) return current;
+
+      const idx = bandList.findIndex((x) => {
+        const sameBand = x.band === targetBand;
+        const sameCall =
+          (x.callsign || "").toUpperCase() === (selectedRepeater.callsign || "").toUpperCase();
+        return sameBand && sameCall;
+      });
+
+      return idx >= 0 ? idx : current;
+    });
+  }, [selectedRepeater, items]);
 
   const go = useCallback((delta) => {
     setIndex((i) => {
@@ -72,12 +124,6 @@ export default function RepeatersPanel({ band: bandProp, onBandChange }) {
   useEffect(() => {
     setIndex((i) => (filteredItems.length ? Math.min(i, filteredItems.length - 1) : 0));
   }, [band, filteredItems.length]);
-
-  useEffect(() => {
-    if (filteredItems.length <= 1) return;
-    const t = setInterval(() => go(1), AUTO_ADVANCE_MS);
-    return () => clearInterval(t);
-  }, [filteredItems.length, go]);
 
   const handleKeyDown = useCallback(
     (e) => {
@@ -113,6 +159,9 @@ export default function RepeatersPanel({ band: bandProp, onBandChange }) {
   const r = filteredItems[index];
   const hasMultiple = filteredItems.length > 1;
 
+  // When search is active, use the repeater's own band for coloring the card.
+  const cardBandClass = r?.band || band;
+
   const cardContent = r ? (
     <>
       <span className="news-slider-title">{r.callsign || "—"}</span>
@@ -146,13 +195,39 @@ export default function RepeatersPanel({ band: bandProp, onBandChange }) {
           </button>
         ))}
       </div>
+      <div className="spots-filters repeaters-filters">
+        <label className="spots-filter repeaters-filter-search">
+          <span className="spots-filter-label">Search</span>
+          <input
+            type="text"
+            className="repeaters-search-input"
+            placeholder="Callsign, city, freq..."
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setIndex(0);
+            }}
+            aria-label="Search repeaters"
+          />
+        </label>
+      </div>
       <div className="news-panel-content news-panel-slider">
-        <div className="news-slider-card">
+        <div className={`news-slider-card repeaters-card repeaters-card--${cardBandClass}`}>
           {emptyFilter ? (
             <div className="news-slider-link panel-empty-inline">Keine Repeater in diesem Band</div>
           ) : (
             <div className="news-slider-link" style={{ cursor: "default" }}>
               {cardContent}
+              {onFocusRepeater && r && Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)) && (
+                <button
+                  type="button"
+                  className="news-slider-btn repeaters-focus-btn"
+                  onClick={() => onFocusRepeater(r)}
+                  style={{ marginTop: 8, alignSelf: "flex-start" }}
+                >
+                  Auf Karte zentrieren
+                </button>
+              )}
             </div>
           )}
         </div>
