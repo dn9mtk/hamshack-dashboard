@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 
 export default function Settings({ open, onClose, onSaved }) {
-  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "" });
+  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "", heyWhatsThatViewId: "" });
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
@@ -19,7 +19,8 @@ export default function Settings({ open, onClose, onSaved }) {
           callsign: data.callsign ?? "",
           locator: data.locator ?? "",
           qthName: data.qthName ?? "",
-          pwsStationId: data.pwsStationId ?? ""
+          pwsStationId: data.pwsStationId ?? "",
+          heyWhatsThatViewId: data.heyWhatsThatViewId ?? ""
         });
       })
       .catch((e) => setErr(String(e)))
@@ -37,7 +38,8 @@ export default function Settings({ open, onClose, onSaved }) {
         callsign: (config.callsign || "").trim().toUpperCase(),
         locator: (config.locator || "").trim().toUpperCase(),
         qthName: (config.qthName || "").trim(),
-        pwsStationId: (config.pwsStationId || "").trim().toUpperCase() || undefined
+        pwsStationId: (config.pwsStationId || "").trim().toUpperCase() || undefined,
+        heyWhatsThatViewId: (config.heyWhatsThatViewId || "").trim() || undefined
       })
     })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
@@ -108,6 +110,15 @@ export default function Settings({ open, onClose, onSaved }) {
               value={config.pwsStationId}
               onChange={(e) => setConfig((c) => ({ ...c, pwsStationId: e.target.value.toUpperCase() }))}
               placeholder="e.g. IKELKH27"
+              autoComplete="off"
+            />
+            <label htmlFor="settings-heywhatsthat">HeyWhatsThat View ID (Map layer)</label>
+            <input
+              id="settings-heywhatsthat"
+              type="text"
+              value={config.heyWhatsThatViewId}
+              onChange={(e) => setConfig((c) => ({ ...c, heyWhatsThatViewId: e.target.value.trim() }))}
+              placeholder="e.g. JJMXK9TK (from heywhatsthat.com/?view=...)"
               autoComplete="off"
             />
             {err && (

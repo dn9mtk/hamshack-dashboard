@@ -1,18 +1,1 @@
-{
-    "name": "hamshack-dashboard-server",
-    "type": "module",
-    "private": true,
-    "version": "0.1.0",
-    "scripts": {
-        "start": "node index.js",
-        "setup": "node setup-env.js"
-    },
-    "dependencies": {
-        "cors": "^2.8.5",
-        "express": "^4.19.2",
-        "fast-xml-parser": "^4.5.3",
-        "node-fetch": "^3.3.2",
-        "satellite.js": "^5.0.0",
-        "topojson-client": "^3.1.0"
-    }
-}
+{"name":"hamshack-dashboard-server","type":"module","private":true,"version":"0.1.0","scripts":{"start":"node index.js","setup":"node setup-env.js","test":"node --test test/integration.test.js"},"dependencies":{"cors":"^2.8.5","express":"^4.19.2","fast-xml-parser":"^4.5.3","node-fetch":"^3.3.2","satellite.js":"^5.0.0","topojson-client":"^3.1.0"}}

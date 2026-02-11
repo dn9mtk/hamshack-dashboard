@@ -15,6 +15,9 @@
     "start": "npm run build && node server/index.js",
     "start:server": "node server/index.js",
     "sync-repeaters": "node server/scripts/syncRepeaters.js",
+    "test": "npm run test:server && npm run test:client",
+    "test:server": "cd server && npm run test",
+    "test:client": "cd client && npm run build",
     "electron": "npm run build && electron .",
     "electron:dev": "electron .",
     "electron:pack": "npm run build && npx electron-builder --win"

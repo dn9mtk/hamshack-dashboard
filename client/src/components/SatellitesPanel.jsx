@@ -1,15 +1,28 @@
-import { useEffect, useState, useCallback } from "react";
-import { formatDateTimeUtc } from "../lib/time.js";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { formatDateTimeUtc, formatTimeLocal } from "../lib/time.js";
 import PanelLoading from "./PanelLoading.jsx";
 import PanelError from "./PanelError.jsx";
 
 const AUTO_ADVANCE_MS = 8000;
+
+function nextPassForSat(passesBySat, satId) {
+  if (!passesBySat?.length || !satId) return null;
+  const sat = passesBySat.find((s) => s.id === satId);
+  const passes = sat?.passes;
+  if (!passes?.length) return null;
+  const now = Date.now();
+  const next = passes.find((p) => new Date(p.aos).getTime() > now);
+  if (!next) return null;
+  const min = Math.round((new Date(next.aos).getTime() - now) / 60000);
+  return { ...next, min };
+}
 
 export default function SatellitesPanel() {
   const [positions, setPositions] = useState([]);
   const [updated, setUpdated] = useState(null);
   const [err, setErr] = useState(null);
   const [index, setIndex] = useState(0);
+  const [passesData, setPassesData] = useState(null);
 
   async function load() {
     try {
@@ -39,6 +52,36 @@ export default function SatellitesPanel() {
     const id = setInterval(load, 15_000);
     return () => clearInterval(id);
   }, []);
+
+  const satId = positions[index]?.id;
+  useEffect(() => {
+    if (!satId) {
+      setPassesData(null);
+      return;
+    }
+    let cancelled = false;
+    async function fetchPasses() {
+      try {
+        const r = await fetch(`/api/sat/passes?ids=${encodeURIComponent(satId)}&hours=24`);
+        if (!r.ok || cancelled) return;
+        const j = await r.json();
+        if (!cancelled) setPassesData(j);
+      } catch {
+        if (!cancelled) setPassesData(null);
+      }
+    }
+    fetchPasses();
+    const id = setInterval(fetchPasses, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [satId]);
+
+  const nextPass = useMemo(
+    () => nextPassForSat(passesData?.passes, satId),
+    [passesData, satId]
+  );
 
   const go = useCallback((delta) => {
     setIndex((i) => {
@@ -91,6 +134,17 @@ export default function SatellitesPanel() {
             <div style={{ marginTop: 6, fontSize: 12, color: "rgba(255,255,255,0.75)" }}>
               Position: {latLon}
             </div>
+            {nextPass && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.2)", fontSize: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Next pass</div>
+                <div style={{ color: "rgba(255,255,255,0.85)" }}>
+                  AOS {formatTimeLocal(nextPass.aos)} · LOS {formatTimeLocal(nextPass.los)} · max {nextPass.maxEl}°
+                </div>
+                <div className="news-slider-hint" style={{ marginTop: 4 }}>
+                  {nextPass.min <= 0 ? "Pass in progress" : `Next pass in ${nextPass.min} min`}
+                </div>
+              </div>
+            )}
           </div>
         </div>
         {hasMultiple && (

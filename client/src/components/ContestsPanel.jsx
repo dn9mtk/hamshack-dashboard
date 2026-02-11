@@ -159,7 +159,7 @@ export default function ContestsPanel() {
   const timeStrHours = startTime ? formatStartsInHours(startTime) : null;
   const startDateTimeStr = startTime ? formatDateTimeUtc(startTime) : "—";
 
-  const cardContent = c ? (
+  const mainContent = c ? (
     <>
       <span className="news-slider-title">{c.name}</span>
       <div className="news-slider-date" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 2 }}>
@@ -172,17 +172,20 @@ export default function ContestsPanel() {
           <span style={{ marginLeft: 6, color: "rgba(255,255,255,0.65)" }}>({timeStrHours})</span>
         )}
       </div>
-      <a
-        href={WA7BNM_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="news-slider-hint"
-        style={{ marginTop: 6 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        WA7BNM Contest Calendar ↗
-      </a>
     </>
+  ) : null;
+
+  const wa7bnmHint = c ? (
+    <a
+      href={WA7BNM_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="news-slider-hint"
+      style={{ marginTop: 6 }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      WA7BNM Contest Calendar ↗
+    </a>
   ) : null;
 
   return (
@@ -206,12 +209,16 @@ export default function ContestsPanel() {
             <div className="news-slider-link panel-empty-inline">No contests in this category</div>
           ) : c ? (
             c.url ? (
-              <a href={c.url} target="_blank" rel="noopener noreferrer" className="news-slider-link">
-                {cardContent}
-              </a>
+              <div className="news-slider-link">
+                <a href={c.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "none", display: "flex", flexDirection: "column", flex: 1 }}>
+                  {mainContent}
+                </a>
+                {wa7bnmHint}
+              </div>
             ) : (
               <div className="news-slider-link" style={{ cursor: "default" }}>
-                {cardContent}
+                {mainContent}
+                {wa7bnmHint}
               </div>
             )
           ) : null}

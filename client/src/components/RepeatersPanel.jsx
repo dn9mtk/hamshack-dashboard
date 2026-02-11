@@ -35,6 +35,7 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
   const [index, setIndex] = useState(0);
   const [bandLocal, setBandLocal] = useState(REPEATER_BAND_2M);
   const [query, setQuery] = useState("");
+  const [reachability, setReachability] = useState(null);
   const band = bandProp ?? bandLocal;
   const setBand = onBandChange ?? setBandLocal;
 
@@ -125,6 +126,31 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
     setIndex((i) => (filteredItems.length ? Math.min(i, filteredItems.length - 1) : 0));
   }, [band, filteredItems.length]);
 
+  const currentRepeater = filteredItems[index];
+  useEffect(() => {
+    const lat = currentRepeater?.lat != null ? Number(currentRepeater.lat) : NaN;
+    const lon = currentRepeater?.lon != null ? Number(currentRepeater.lon) : NaN;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setReachability(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/propagation/path?toLat=${lat}&toLon=${lon}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+      .then((data) => {
+        if (!cancelled)
+          setReachability({
+            lineOfSightClear: data.lineOfSightClear,
+            obstructedAtKm: data.obstructedAtKm,
+            distanceKm: data.distanceKm
+          });
+      })
+      .catch(() => {
+        if (!cancelled) setReachability(null);
+      });
+    return () => { cancelled = true; };
+  }, [currentRepeater?.lat, currentRepeater?.lon]);
+
   const handleKeyDown = useCallback(
     (e) => {
       if (e.key === "ArrowLeft") {
@@ -174,6 +200,16 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
       {r.city && (
         <div className="news-slider-date" style={{ marginTop: 4, fontSize: 11 }}>
           {r.city}
+        </div>
+      )}
+      {reachability != null && (
+        <div className="news-slider-date" style={{ marginTop: 6, fontSize: 12 }}>
+          LOS: {reachability.lineOfSightClear ? (
+            <strong style={{ color: "rgba(81,207,102,0.95)" }}>Clear</strong>
+          ) : (
+            <span>Obstructed{reachability.obstructedAtKm != null ? ` ~${reachability.obstructedAtKm} km` : ""}</span>
+          )}
+          {reachability.distanceKm != null && ` · ${reachability.distanceKm} km`}
         </div>
       )}
       <span className="news-slider-hint" style={{ marginTop: 6 }}>Repeater Deutschland · Karte: Repeater-Layer einschalten</span>

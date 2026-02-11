@@ -17,6 +17,7 @@ import BandplanPanel from "./components/BandplanPanel.jsx";
 import LogbookPanel from "./components/LogbookPanel.jsx";
 import RigDisplay from "./components/RigDisplay.jsx";
 import RefPanel from "./components/RefPanel.jsx";
+import RangePanel from "./components/RangePanel.jsx";
 import { loadRigFreq, saveRigFreq } from "./lib/rigFreqStorage.js";
 
 const SIDEBAR_TAB_KEY = "hamshack_sidebar_tab";
@@ -28,6 +29,7 @@ const SIDEBAR_TABS = [
   { id: "band", label: "Band" },
   { id: "log", label: "Log" },
   { id: "ref", label: "Ref" },
+  { id: "range", label: "Range" },
   { id: "space", label: "Space" },
   { id: "weather", label: "Weather" },
   { id: "muf", label: "MUF" },
@@ -45,7 +47,7 @@ function getInitialTab() {
 }
 
 export default function App() {
-  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "" });
+  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "", heyWhatsThatViewId: "" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dxpeditionsFilter, setDxpeditionsFilter] = useState("all"); // "all" | "active" | "upcoming"
   const [repeatersBandFilter, setRepeatersBandFilter] = useState("2m"); // "2m" | "70cm" | "10m"
@@ -54,6 +56,7 @@ export default function App() {
   const [sunData, setSunData] = useState(null);
   const [sidebarTab, setSidebarTab] = useState(getInitialTab);
   const [rigFreq, setRigFreq] = useState(loadRigFreq);
+  const [radioHorizon, setRadioHorizon] = useState(null);
 
   function handleRigFreqChange(value) {
     setRigFreq(value);
@@ -74,7 +77,8 @@ export default function App() {
         callsign: data.callsign ?? "—",
         locator: data.locator ?? "—",
         qthName: data.qthName ?? "",
-        pwsStationId: data.pwsStationId ?? ""
+        pwsStationId: data.pwsStationId ?? "",
+        heyWhatsThatViewId: data.heyWhatsThatViewId ?? ""
       }))
       .catch(() => {});
   }
@@ -115,11 +119,12 @@ export default function App() {
             className="btn-settings"
             onClick={() => setSettingsOpen(true)}
             aria-label="Open settings"
+            title="Settings"
           >
-            <span className="btn-settings-icon" aria-hidden="true">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a2 2 0 0 0 .4-1.06V10a2 2 0 0 0-.4-1.06l-1.73-1a2 2 0 0 0-2.73.73l-1 1.73a2 2 0 0 1-2.73.73l-1.73-1a2 2 0 0 0-1.06-.4H8.5a2 2 0 0 0-1.06.4l-1.73 1a2 2 0 0 1-2.73-.73l-1-1.73a2 2 0 0 0-2.73-.73l-1.73 1A2 2 0 0 0 2 10v3.94a2 2 0 0 0 .4 1.06l1.73 1a2 2 0 0 0 2.73-.73l1-1.73a2 2 0 0 1 2.73-.73l1.73 1c.3.18.64.3 1.06.4H15.5a2 2 0 0 0 1.06-.4l1.73-1a2 2 0 0 0 .73-2.73l-1-1.73Z"/></svg>
-            </span>
-            Settings
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
           </button>
           <Clock sunData={sunData} />
         </div>
@@ -223,6 +228,16 @@ export default function App() {
                 <RefPanel />
               </div>
             )}
+            {sidebarTab === "range" && (
+              <div className="panel">
+                <h2>Range</h2>
+                <RangePanel
+                  locator={config.locator}
+                  rigFreq={rigFreq}
+                  onHorizonChange={setRadioHorizon}
+                />
+              </div>
+            )}
             {sidebarTab === "space" && (
               <div className="panel">
                 <h2>Space Weather</h2>
@@ -267,6 +282,7 @@ export default function App() {
             repeatersBandFilter={repeatersBandFilter}
             onRepeatersBandChange={setRepeatersBandFilter}
             focusedRepeater={focusedRepeater}
+            radioHorizon={radioHorizon}
             onSelectRepeater={(rep) => {
               if (rep?.band) {
                 setRepeatersBandFilter(rep.band);

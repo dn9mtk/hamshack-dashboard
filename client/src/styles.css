@@ -319,18 +319,19 @@
   /* Settings button in header */
   .topbar-actions { display: flex; align-items: center; gap: 8px; }
   .btn-settings {
-    padding: 6px 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
     background: rgba(255,255,255,0.08);
     border: 1px solid rgba(255,255,255,0.2);
     border-radius: 8px;
     color: var(--muted);
-    font-size: 12px;
     cursor: pointer;
     transition: color 0.15s, border-color 0.15s;
   }
   .btn-settings:hover, .btn-settings:focus-visible { color: var(--text); border-color: rgba(255,255,255,0.35); outline: none; }
   .btn-settings:focus-visible { box-shadow: 0 0 0 2px rgba(77,171,247,0.5); }
-  .btn-settings-icon { display: inline-flex; align-items: center; margin-right: 6px; vertical-align: middle; }
 
   /* Modal overlay */
   .modal-overlay {
@@ -805,6 +806,283 @@
   .ref-qcodes-item {
     white-space: nowrap;
   }
+  .ref-range-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .ref-range-row label { color: var(--muted); }
+  .ref-range-row input {
+    width: 80px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.06);
+    color: inherit;
+    font-size: 13px;
+  }
+  .ref-range-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .ref-range-results {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .ref-range-results strong { color: rgba(255,255,255,0.9); }
+  .ref-range-link {
+    color: rgba(77,171,247,0.95);
+    font-size: 13px;
+    text-decoration: none;
+  }
+  .ref-range-link:hover { text-decoration: underline; }
+
+  /* Range panel – improved layout and UX */
+  .range-panel .news-slider-card { min-height: 140px; }
+  .range-panel-inner { gap: 12px; padding: 14px 16px; }
+  .range-slide-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.95);
+    margin: 0 0 6px 0;
+  }
+  .range-slide-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .range-slide-title-row .range-slide-title { margin-bottom: 0; }
+  .range-info-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.8);
+    cursor: pointer;
+  }
+  .range-info-btn:hover {
+    background: rgba(77,171,247,0.2);
+    border-color: rgba(77,171,247,0.5);
+    color: #fff;
+  }
+  .range-info-btn:focus-visible {
+    outline: 2px solid rgba(77,171,247,0.8);
+    outline-offset: 2px;
+  }
+  /* Flip card for Link Budget info */
+  .range-flip-card {
+    perspective: 800px;
+  }
+  .range-flip-inner {
+    position: relative;
+    width: 100%;
+    min-height: 380px;
+    transform-style: preserve-3d;
+    transition: transform 0.5s ease;
+  }
+  .range-flip-card--flipped .range-flip-inner {
+    transform: rotateY(180deg);
+  }
+  .range-flip-front,
+  .range-flip-back {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    min-height: 380px;
+    overflow: hidden;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+  .range-flip-front {
+    transform: rotateY(0deg);
+  }
+  .range-flip-back {
+    transform: rotateY(180deg);
+    display: flex;
+    flex-direction: column;
+  }
+  .range-flip-back-content {
+    flex: 1;
+    margin-bottom: 12px;
+  }
+  .range-flip-back-content p {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    line-height: 1.4;
+    color: rgba(255,255,255,0.9);
+  }
+  .range-flip-back-content p:last-child { margin-bottom: 0; }
+  .range-flip-ok-btn {
+    align-self: flex-end;
+    padding: 8px 20px;
+    border-radius: 8px;
+    border: 1px solid rgba(77,171,247,0.5);
+    background: rgba(77,171,247,0.2);
+    color: #fff;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .range-flip-ok-btn:hover {
+    background: rgba(77,171,247,0.35);
+  }
+  .range-flip-ok-btn:focus-visible {
+    outline: 2px solid rgba(77,171,247,0.8);
+    outline-offset: 2px;
+  }
+  .range-formula {
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+    margin: 0 0 12px 0;
+    font-family: ui-monospace, monospace;
+  }
+  .range-description {
+    font-size: 12px;
+    color: rgba(255,255,255,0.7);
+    line-height: 1.4;
+    margin: 0 0 12px 0;
+  }
+  .range-input-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .range-input-block label {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .range-input-block input {
+    width: 100%;
+    max-width: 100px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.08);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    color-scheme: dark;
+  }
+  .range-input-block input[type="number"]::-webkit-outer-spin-button,
+  .range-input-block input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .range-input-block input[type="number"] {
+    -moz-appearance: textfield;
+  }
+  .range-input-block input:focus-visible {
+    outline: 2px solid rgba(77,171,247,0.6);
+    outline-offset: 2px;
+  }
+  .range-input-block--readonly .range-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(77,171,247,0.95);
+    padding: 6px 0 0 0;
+  }
+  .range-input-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .range-results-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .range-result-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.85);
+  }
+  .range-result-item strong { margin-left: auto; color: #fff; }
+  .range-result-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .range-results-card {
+    padding: 12px 14px;
+    background: rgba(77,171,247,0.08);
+    border-radius: 10px;
+    border: 1px solid rgba(77,171,247,0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .range-results-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+  }
+  .range-results-label { color: rgba(255,255,255,0.7); }
+  .range-results-value { font-weight: 700; color: #fff; }
+  .range-results-row--highlight .range-results-value {
+    color: rgba(77,171,247,1);
+    font-size: 15px;
+  }
+  .range-terrain-link {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: rgba(77,171,247,0.95);
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    padding: 12px 14px;
+    background: rgba(77,171,247,0.1);
+    border-radius: 10px;
+    border: 1px solid rgba(77,171,247,0.3);
+  }
+  .range-terrain-link:hover {
+    background: rgba(77,171,247,0.18);
+    text-decoration: none;
+  }
+  .range-terrain-link:focus-visible {
+    outline: 2px solid rgba(77,171,247,0.8);
+    outline-offset: 2px;
+  }
+  .range-terrain-coords {
+    font-size: 12px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.6);
+  }
+  .range-empty { color: rgba(255,255,255,0.5); font-size: 13px; margin: 0; }
+  .range-panel-nav .news-slider-counter {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .range-nav-label { font-size: 10px; color: rgba(255,255,255,0.5); text-transform: uppercase; }
+  .range-nav-index { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.9); }
   .spots-meta {
     font-size: 11px;
     color: rgba(255,255,255,0.5);

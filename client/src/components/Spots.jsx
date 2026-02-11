@@ -35,10 +35,11 @@ export default function Spots() {
 
   const [band, setBand] = useState(saved.band);
   const [mode, setMode] = useState(saved.mode);
+  const [spottedMe, setSpottedMe] = useState(false);
 
   useEffect(() => saveAndBroadcast({ band, mode }), [band, mode]);
 
-  const query = useMemo(() => buildSpotQuery({ band, mode }), [band, mode]);
+  const query = useMemo(() => buildSpotQuery({ band, mode, spottedMe: spottedMe || undefined }), [band, mode, spottedMe]);
 
   async function load() {
     try {
@@ -104,28 +105,50 @@ export default function Spots() {
       <div className="spots-filters">
         <Filter label="Band" value={band} setValue={setBand} options={["ALL","10","12","15","17","20","30","40"]} />
         <Filter label="Mode" value={mode} setValue={setMode} options={["ALL","CW","FT8","FT4","JT65","JT9","JS8","PSK","RTTY","SSB","AM","FM","SSTV"]} />
+        <div role="group" className="contests-toggle" aria-label="Spots view">
+          <button
+            type="button"
+            className={`contests-toggle-btn ${!spottedMe ? "active" : ""}`}
+            onClick={() => setSpottedMe(false)}
+            aria-pressed={!spottedMe}
+          >
+            All spots
+          </button>
+          <button
+            type="button"
+            className={`contests-toggle-btn ${spottedMe ? "active" : ""}`}
+            onClick={() => setSpottedMe(true)}
+            aria-pressed={spottedMe}
+          >
+            Wer spottet mich?
+          </button>
+        </div>
       </div>
 
       {spots.length === 0 ? (
         <div className="panel-empty">
-          No spots yet. Try ALL/ALL and wait a moment.
+          {spottedMe ? "No one is spotting your callsign yet." : "No spots yet. Try ALL/ALL and wait a moment."}
         </div>
       ) : (
         <div className="news-panel-content news-panel-slider">
           <div className="news-slider-card">
             <div className="news-slider-link" style={{ cursor: "default" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-                <span className="news-slider-title" style={{ WebkitLineClamp: 1 }}>{spot.dx}</span>
+                <span className="news-slider-title" style={{ WebkitLineClamp: 1 }}>
+                  {spottedMe ? (spot.spotter || spot.dx) : spot.dx}
+                </span>
                 <span style={{ fontWeight: 800, fontSize: 13, flexShrink: 0 }}>{spot.freq} MHz</span>
               </div>
               <div className="news-slider-date">
-                {spot.mode || "—"} · {spot.src} · via {spot.spotter || "—"} · {formatTimeLocal(spot.t)}
+                {spottedMe
+                  ? `Spotted you · ${spot.mode || "—"} · ${spot.src} · ${formatTimeLocal(spot.t)}`
+                  : `${spot.mode || "—"} · ${spot.src} · via ${spot.spotter || "—"} · ${formatTimeLocal(spot.t)}`}
                 {typeof spot.bearing === "number" ? ` · ${spot.bearing}°` : ""}
                 {typeof spot.distKm === "number" ? ` · ${spot.distKm} km` : ""}
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 4, fontSize: 12 }}>
-                <a href={`https://www.qrz.com/db/${encodeURIComponent(spot.dx)}`} target="_blank" rel="noreferrer" style={{ color: "rgba(77,171,247,0.9)" }}>QRZ</a>
-                <a href={`https://clublog.org/dxcc?call=${encodeURIComponent(spot.dx)}`} target="_blank" rel="noreferrer" style={{ color: "rgba(77,171,247,0.9)" }}>ClubLog</a>
+                <a href={`https://www.qrz.com/db/${encodeURIComponent(spottedMe ? (spot.spotter || spot.dx) : spot.dx)}`} target="_blank" rel="noreferrer" style={{ color: "rgba(77,171,247,0.9)" }}>QRZ</a>
+                <a href={`https://clublog.org/dxcc?call=${encodeURIComponent(spottedMe ? (spot.spotter || spot.dx) : spot.dx)}`} target="_blank" rel="noreferrer" style={{ color: "rgba(77,171,247,0.9)" }}>ClubLog</a>
               </div>
               {spot.entity && (
                 <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginTop: 2 }}>

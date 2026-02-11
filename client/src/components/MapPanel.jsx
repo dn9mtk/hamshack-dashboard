@@ -21,6 +21,12 @@ const DXPEDITIONS_LAYER_KEY = "hamshack_dxpeditions_layer";
 const BEACONS_LAYER_KEY = "hamshack_beacons_layer";
 const SATELLITES_LAYER_KEY = "hamshack_satellites_layer";
 const REPEATERS_LAYER_KEY = "hamshack_repeaters_layer";
+const HORIZON_LAYER_KEY = "hamshack_horizon_layer";
+const HORIZON_COLORS = {
+  ground: { color: "rgba(230,119,0,0.9)", fill: "rgba(230,119,0,0.2)" },
+  mobile: { color: "rgba(77,171,247,0.9)", fill: "rgba(77,171,247,0.15)" },
+  base: { color: "rgba(55,178,77,0.9)", fill: "rgba(55,178,77,0.15)" }
+};
 
 // DXView-style view options: all | MUF | LUF | band frequencies (MHz)
 const VIEW_OPTIONS = ["none", "MUF", "LUF", "1.8", "3.5", "5.3", "7", "10", "14", "18", "21", "24", "28", "50"];
@@ -168,6 +174,14 @@ function loadRepeatersLayerPref() {
   }
 }
 
+function loadHorizonLayerPref() {
+  try {
+    return localStorage.getItem(HORIZON_LAYER_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function pathForecastPopupHtml(data) {
   const toStr = data.to?.grid || (data.to?.lat != null && data.to?.lon != null
     ? `${Number(data.to.lat).toFixed(1)}°, ${Number(data.to.lon).toFixed(1)}°`
@@ -234,7 +248,8 @@ export default function MapPanel({
   repeatersBandFilter = "2m",
   onRepeatersBandChange,
   onSelectRepeater,
-  focusedRepeater
+  focusedRepeater,
+  radioHorizon = null
 }) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
@@ -256,6 +271,7 @@ export default function MapPanel({
   const lufOverlayRef = useRef(null);
   const satellitesLayerRef = useRef(null);
   const satelliteRangeLayerRef = useRef(null);
+  const horizonLayerRef = useRef(null);
   const currentFiltersRef = useRef(loadSavedFilters());
 
   const [mapReady, setMapReady] = useState(false);
@@ -274,10 +290,11 @@ export default function MapPanel({
   const [beaconsLayerOn, setBeaconsLayerOn] = useState(() => loadBeaconsLayerPref());
   const [satellitesLayerOn, setSatellitesLayerOn] = useState(() => loadSatellitesLayerPref());
   const [repeatersLayerOn, setRepeatersLayerOn] = useState(() => loadRepeatersLayerPref());
-
+  const [horizonLayerOn, setHorizonLayerOn] = useState(() => loadHorizonLayerPref());
   const [spaceSummary, setSpaceSummary] = useState(null);
   const [perspectiveGrid, setPerspectiveGrid] = useState("");
   const [bandGridSource, setBandGridSource] = useState(null);
+  const [beaconStatus, setBeaconStatus] = useState(null);
   const mapWrapperRef = useRef(null);
 
   useEffect(() => {
@@ -317,6 +334,27 @@ export default function MapPanel({
   }, [beaconsLayerOn]);
 
   useEffect(() => {
+    if (!beaconsLayerOn) return;
+    let cancelled = false;
+    async function fetchBeaconStatus() {
+      try {
+        const r = await fetch("/api/beacons/status");
+        if (!r.ok || cancelled) return;
+        const data = await r.json();
+        if (!cancelled) setBeaconStatus(data);
+      } catch {
+        if (!cancelled) setBeaconStatus(null);
+      }
+    }
+    fetchBeaconStatus();
+    const id = setInterval(fetchBeaconStatus, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [beaconsLayerOn]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(SATELLITES_LAYER_KEY, satellitesLayerOn ? "true" : "false");
     } catch {}
@@ -327,6 +365,14 @@ export default function MapPanel({
       localStorage.setItem(REPEATERS_LAYER_KEY, repeatersLayerOn ? "true" : "false");
     } catch {}
   }, [repeatersLayerOn]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(HORIZON_LAYER_KEY, horizonLayerOn ? "true" : "false");
+    } catch {}
+  }, [horizonLayerOn]);
+
+
 
   // Sync DX/RBN spots layer visibility with map
   useEffect(() => {
@@ -569,14 +615,16 @@ export default function MapPanel({
         attributionControl: true,
         minZoom: 2,
         maxZoom: 10,
-        maxBounds: [[-90, -180], [90, 180]],
+        maxBounds: [[-85, -179], [85, 179]],
         maxBoundsViscosity: 1
       }).setView([25, 0], 2);
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-      attribution: "© OpenStreetMap contributors © CARTO",
-      noWrap: true
-    }).addTo(map);
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors © CARTO",
+        noWrap: true,
+        maxZoom: 19,
+        maxNativeZoom: 19
+      }).addTo(map);
 
     // Pane for satellites (above shading)
     const satPane = map.createPane("satellitesPane");
@@ -1223,6 +1271,46 @@ export default function MapPanel({
     };
   }, [selectedSatId, mapReady]);
 
+  // Radio horizon circles (from Range panel) – ground, mobile, base, each different color
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = horizonLayerRef.current;
+    if (layer && map && map.hasLayer(layer)) {
+      map.removeLayer(layer);
+      horizonLayerRef.current = null;
+    }
+    if (!horizonLayerOn || !radioHorizon || !map) return;
+    const { center, ground, mobile, base } = radioHorizon;
+    if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lon)) return;
+    const group = L.layerGroup();
+    [
+      { km: ground, key: "ground" },
+      { km: mobile, key: "mobile" },
+      { km: base, key: "base" }
+    ].forEach(({ km, key }) => {
+      if (!Number.isFinite(km) || km <= 0) return;
+      const c = HORIZON_COLORS[key];
+      const circle = L.circle([center.lat, center.lon], {
+        radius: km * 1000,
+        color: c.color,
+        fillColor: c.fill,
+        fillOpacity: 1,
+        weight: 2
+      });
+      group.addLayer(circle);
+    });
+    if (group.getLayers().length > 0) {
+      group.addTo(map);
+      horizonLayerRef.current = group;
+    }
+    return () => {
+      if (map && horizonLayerRef.current && map.hasLayer(horizonLayerRef.current)) {
+        map.removeLayer(horizonLayerRef.current);
+      }
+      horizonLayerRef.current = null;
+    };
+  }, [horizonLayerOn, radioHorizon, mapReady]);
+
   // Space summary for propagation bar
   useEffect(() => {
     let alive = true;
@@ -1478,6 +1566,24 @@ export default function MapPanel({
             >
               {repeatersLayerOn ? "Repeater ON" : "Repeater OFF"}
             </button>
+            <button
+              type="button"
+              onClick={() => setHorizonLayerOn((on) => !on)}
+              aria-label={horizonLayerOn ? "Hide Range layer" : "Show Range layer"}
+              title={horizonLayerOn ? "Range ON – click to hide" : "Range OFF – click to show"}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 6,
+                border: "1px solid " + (horizonLayerOn ? "rgba(77,171,247,0.8)" : "rgba(255,255,255,0.2)"),
+                background: horizonLayerOn ? "rgba(77,171,247,0.35)" : "rgba(255,255,255,0.08)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: horizonLayerOn ? 700 : 400
+              }}
+            >
+              {horizonLayerOn ? "Range ON" : "Range OFF"}
+            </button>
             {repeatersLayerOn && onRepeatersBandChange && (
               <>
                 {REPEATER_BANDS.map(({ key, label }) => (
@@ -1535,7 +1641,7 @@ export default function MapPanel({
           style={{ borderRadius: "0 0 14px 14px" }}
           aria-label="Map"
         >
-      {(spotsLayerOn || dxpeditionsLayerOn || satellitesLayerOn || repeatersLayerOn) && (
+      {(spotsLayerOn || dxpeditionsLayerOn || satellitesLayerOn || repeatersLayerOn || horizonLayerOn) && (
         <>
           <div className="map-legend">
             {spotsLayerOn && (
@@ -1597,6 +1703,55 @@ export default function MapPanel({
                     <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#4dabf7", borderColor: "#4dabf7" }} />
                     <span className="map-legend-label">Amateur</span>
                   </span>
+                </div>
+              </div>
+            )}
+            {horizonLayerOn && radioHorizon && (
+              <div className="map-legend-box" style={{ border: "2px solid rgba(77,171,247,0.6)" }}>
+                <div className="map-legend-title">Range</div>
+                <div className="map-legend-row">
+                  {radioHorizon.ground != null && (
+                    <span className="map-legend-item">
+                      <span className="map-legend-dot map-legend-dot--circle" style={{ background: "rgba(230,119,0,0.6)", borderColor: "rgba(230,119,0,0.9)" }} />
+                      <span className="map-legend-label">Ground {radioHorizon.ground.toFixed(1)} km</span>
+                    </span>
+                  )}
+                  {radioHorizon.mobile != null && (
+                    <span className="map-legend-item">
+                      <span className="map-legend-dot map-legend-dot--circle" style={{ background: "rgba(77,171,247,0.6)", borderColor: "rgba(77,171,247,0.9)" }} />
+                      <span className="map-legend-label">Mobile {radioHorizon.mobile.toFixed(1)} km</span>
+                    </span>
+                  )}
+                  {radioHorizon.base != null && (
+                    <span className="map-legend-item">
+                      <span className="map-legend-dot map-legend-dot--circle" style={{ background: "rgba(55,178,77,0.6)", borderColor: "rgba(55,178,77,0.9)" }} />
+                      <span className="map-legend-label">Base {radioHorizon.base.toFixed(1)} km</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            {beaconsLayerOn && (
+              <div className="map-legend-box" style={{ border: "2px solid rgba(12,166,120,0.5)" }}>
+                <div className="map-legend-title">Beacon (now)</div>
+                <div className="map-legend-row">
+                  {beaconStatus?.current ? (
+                    <>
+                      <span className="map-legend-item">
+                        <span className="map-legend-label" style={{ fontWeight: 700 }}>{beaconStatus.current.beacon}</span>
+                      </span>
+                      <span className="map-legend-item">
+                        <span className="map-legend-label">{beaconStatus.current.frequency} MHz</span>
+                      </span>
+                      {typeof beaconStatus.nextChangeInSec === "number" && (
+                        <span className="map-legend-item">
+                          <span className="map-legend-label">next in {beaconStatus.nextChangeInSec} s</span>
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="map-legend-label">—</span>
+                  )}
                 </div>
               </div>
             )}

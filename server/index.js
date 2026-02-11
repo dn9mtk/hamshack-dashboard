@@ -102,7 +102,7 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId"];
+const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId", "heyWhatsThatViewId"];
 app.post("/api/config", (req, res) => {
   const body = req.body || {};
   const updates = {};
@@ -249,6 +249,33 @@ app.get("/api/beacons", (req, res) => {
     res.json({ beacons, frequencies: NCDXF_FREQS });
   } catch (e) {
     res.status(500).json({ error: "beacons_failed", detail: String(e) });
+  }
+});
+
+// NCDXF beacon schedule: 18 beacons × 5 freqs, 10 sec each = 900 sec cycle
+const NCDXF_CYCLE_SEC = 900;
+const NCDXF_BEACON_ORDER = [14.1, 18.11, 21.15, 24.93, 28.2];
+
+app.get("/api/beacons/status", (req, res) => {
+  try {
+    const raw = fs.readFileSync(path.join(DATA_DIR, "ncdxf-beacons.json"), "utf8");
+    const list = JSON.parse(raw);
+    const nowSec = (Date.now() / 1000) % NCDXF_CYCLE_SEC;
+    const slot = Math.floor(nowSec / 10) % 90;
+    const beaconIndex = Math.floor(slot / 5) % 18;
+    const freqIndex = slot % 5;
+    const beacon = list[beaconIndex] || {};
+    const frequency = NCDXF_BEACON_ORDER[freqIndex];
+    const nextChangeInSec = 10 - (nowSec % 10);
+    const nextChangeInSecRounded = Math.ceil(nextChangeInSec);
+    res.json({
+      current: { beacon: beacon.call, grid: beacon.grid, location: beacon.location, frequency },
+      nextChangeInSec: nextChangeInSecRounded,
+      cycleSec: NCDXF_CYCLE_SEC,
+      updated: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ error: "beacons_status_failed", detail: String(e) });
   }
 });
 
@@ -683,6 +710,9 @@ app.get("/api/propagation/path", async (req, res) => {
     if (!Number.isFinite(toLat) || !Number.isFinite(toLon)) {
       return res.status(400).json({ error: "Provide toLat/toLon or toGrid" });
     }
+    const freqMHz = Number(req.query.freq) || null;
+    const powerW = Number(req.query.powerW);
+    const powerWatts = Number.isFinite(powerW) && powerW > 0 ? powerW : 5;
     const space = await cached("propagation_sfi_kp", 60_000, async () => {
       const out = { solarFlux: null, kp: null };
       try {
@@ -786,6 +816,57 @@ app.get("/api/propagation/path", async (req, res) => {
       elevationProfile = null;
     }
 
+    let lineOfSightClear = true;
+    let obstructedAtKm = null;
+    if (elevationProfile && elevationProfile.samples && elevationProfile.samples.length >= 2) {
+      const samples = elevationProfile.samples;
+      const distTotal = samples[samples.length - 1].distKm || 1;
+      const elevStart = samples[0].elevation;
+      const elevEnd = samples[samples.length - 1].elevation;
+      const marginM = 15;
+      for (let i = 1; i < samples.length - 1; i++) {
+        const s = samples[i];
+        const d = s.distKm;
+        const terrainH = Number(s.elevation);
+        const losH = elevStart + (elevEnd - elevStart) * (d / distTotal) + marginM;
+        if (Number.isFinite(terrainH) && terrainH > losH) {
+          lineOfSightClear = false;
+          if (obstructedAtKm == null) obstructedAtKm = Math.round(d * 10) / 10;
+          break;
+        }
+      }
+    }
+
+    // VHF/UHF link budget when freq (MHz) is given: free-space path loss only valid within radio horizon.
+    // Beyond ~50 km, Earth curvature blocks direct path; never show "OK" for long distances.
+    const LOS_RANGE_KM = 50;
+    let linkBudget = null;
+    if (Number.isFinite(freqMHz) && freqMHz > 0 && distKm > 0) {
+      const fsplDb = 20 * Math.log10(distKm) + 20 * Math.log10(freqMHz) + 32.44;
+      const eirpDbm = 10 * Math.log10(powerWatts * 1000);
+      const signalAtRepeaterDbm = eirpDbm - fsplDb;
+      const sensitivityDbm = -120;
+      const marginOkDb = 10;
+      const marginMarginalDb = 3;
+      let linkEstimate = "unlikely";
+      if (distKm > LOS_RANGE_KM) {
+        linkEstimate = "out_of_range";
+      } else if (signalAtRepeaterDbm >= sensitivityDbm + marginOkDb) {
+        linkEstimate = "ok";
+      } else if (signalAtRepeaterDbm >= sensitivityDbm + marginMarginalDb) {
+        linkEstimate = "marginal";
+      }
+      linkBudget = {
+        freqMHz,
+        powerW: powerWatts,
+        pathLossDb: Math.round(fsplDb * 10) / 10,
+        signalAtRepeaterDbm: Math.round(signalAtRepeaterDbm * 10) / 10,
+        linkEstimate,
+        sensitivityDbm,
+        losRangeKm: LOS_RANGE_KM
+      };
+    }
+
     res.json({
       from: { lat: fromQ.lat, lon: fromQ.lon, locator: CONFIG.locator },
       to: { lat: toLat, lon: toLon, grid: toGrid || null },
@@ -796,6 +877,9 @@ app.get("/api/propagation/path", async (req, res) => {
       kp: space.kp,
       bands,
       elevationProfile,
+      lineOfSightClear,
+      obstructedAtKm,
+      linkBudget,
       predictionType: "full"
     });
   } catch (e) {
@@ -1192,15 +1276,25 @@ startRbn({
 
 // --------------------
 // Spots endpoint (filters)
-// /api/spots?band=10&mode=CW&src=rbn&limit=80
+// /api/spots?band=10&mode=CW&src=rbn&limit=80&spottedMe=1
 // --------------------
+function baseCallsign(call) {
+  if (!call || typeof call !== "string") return "";
+  return call.trim().toUpperCase().split("/")[0];
+}
+
 app.get("/api/spots", (req, res) => {
-  const { band, mode, src, limit } = req.query;
+  const { band, mode, src, limit, spottedMe } = req.query;
 
   // Ensure all spots have spotter lat/lon for map connection lines (idempotent)
   spots.forEach((s) => enrichSpot(s));
 
   let out = spots;
+
+  if (spottedMe === "1" || spottedMe === "true") {
+    const myBase = baseCallsign(CONFIG.callsign);
+    if (myBase) out = out.filter((x) => baseCallsign(x.dx) === myBase);
+  }
 
   if (src) {
     const s = String(src).toLowerCase();
@@ -1739,6 +1833,82 @@ function footprintRadiusKm(altKm) {
   return EARTH_RADIUS_KM * theta;
 }
 
+function elevationDegrees(obsLat, obsLon, satLat, satLon, altKm) {
+  const R = EARTH_RADIUS_KM;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const latO = toRad(obsLat);
+  const lonO = toRad(obsLon);
+  const latS = toRad(satLat);
+  const lonS = toRad(satLon);
+  const cosTheta = Math.sin(latO) * Math.sin(latS) + Math.cos(latO) * Math.cos(latS) * Math.cos(lonO - lonS);
+  const theta = Math.acos(Math.max(-1, Math.min(1, cosTheta)));
+  const r = Math.sqrt(R * R + (R + altKm) * (R + altKm) - 2 * R * (R + altKm) * Math.cos(theta));
+  if (r < 1e-6) return 90;
+  const sinEl = ((R + altKm) * Math.cos(theta) - R) / r;
+  const elRad = Math.asin(Math.max(-1, Math.min(1, sinEl)));
+  return (elRad * 180) / Math.PI;
+}
+
+app.get("/api/sat/passes", async (req, res) => {
+  try {
+    const ids = (req.query.ids || req.query.id || "ISS").toString().trim().split(",").map(s => s.trim()).filter(Boolean);
+    const lat = parseFloat(req.query.lat);
+    const lon = parseFloat(req.query.lon);
+    const obsLat = Number.isFinite(lat) ? lat : (() => { const q = getQth(); return q ? q.lat : 50; })();
+    const obsLon = Number.isFinite(lon) ? lon : (() => { const q = getQth(); return q ? q.lon : 8; })();
+    const hours = Math.min(72, Math.max(1, parseInt(req.query.hours, 10) || 24));
+    const stepMin = 1;
+    const list = await getAmateurTleList();
+    const wantSet = new Set(ids);
+    const passesBySat = [];
+    for (const entry of list) {
+      if (!wantSet.has(entry.id)) continue;
+      const passes = [];
+      const start = new Date();
+      let prevEl = null;
+      let inPass = false;
+      let passStart = null;
+      let maxEl = -90;
+      let maxElTime = null;
+      for (let i = 0; i <= hours * 60; i += stepMin) {
+        const when = new Date(start.getTime() + i * 60 * 1000);
+        const pos = propagateOne(entry, when);
+        if (!pos) continue;
+        const el = elevationDegrees(obsLat, obsLon, pos.lat, pos.lon, pos.altKm);
+        if (prevEl !== null) {
+          if (prevEl < 0 && el >= 0) {
+            inPass = true;
+            passStart = new Date(when.getTime() - (stepMin * 60 * 1000 * (el / (el - prevEl))));
+            maxEl = el;
+            maxElTime = when;
+          } else if (prevEl >= 0 && el < 0 && inPass) {
+            inPass = false;
+            const losTime = new Date(when.getTime() - (stepMin * 60 * 1000 * (el / (el - prevEl))));
+            passes.push({
+              aos: passStart.toISOString(),
+              los: losTime.toISOString(),
+              maxEl: Math.round(maxEl * 10) / 10,
+              maxElAt: maxElTime.toISOString(),
+              durationMin: Math.round((losTime - passStart) / 60000)
+            });
+            passStart = null;
+            maxEl = -90;
+            maxElTime = null;
+          } else if (inPass && el > maxEl) {
+            maxEl = el;
+            maxElTime = when;
+          }
+        }
+        prevEl = el;
+      }
+      if (passes.length) passesBySat.push({ id: entry.id, name: entry.name, passes });
+    }
+    res.json({ observer: { lat: obsLat, lon: obsLon }, hours, passes: passesBySat, updated: new Date().toISOString() });
+  } catch (e) {
+    res.status(500).json({ error: "sat_passes_failed", detail: String(e) });
+  }
+});
+
 app.get("/api/sat/track", async (req, res) => {
   try {
     const id = (req.query.id || req.query.ids || "ISS").toString().trim().split(",")[0];
@@ -2230,11 +2400,16 @@ if (fs.existsSync(clientBuildPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  if (fs.existsSync(clientBuildPath)) {
-    console.log(`Serving static files from ${clientBuildPath}`);
-  } else {
-    console.log("Static files not found - run 'npm run build' in client directory for production");
-  }
-});
+export { app, PORT };
+
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
+if (isMain) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    if (fs.existsSync(clientBuildPath)) {
+      console.log(`Serving static files from ${clientBuildPath}`);
+    } else {
+      console.log("Static files not found - run 'npm run build' in client directory for production");
+    }
+  });
+}
