@@ -96,7 +96,7 @@ export default function NewsPanel() {
               onClick={() => go(-1)}
               aria-label="Previous item"
             >
-              ‹
+              &#60;
             </button>
             <span className="news-slider-counter" aria-live="polite">
               {index + 1} / {items.length}
@@ -107,7 +107,7 @@ export default function NewsPanel() {
               onClick={() => go(1)}
               aria-label="Next item"
             >
-              ›
+              &#62;
             </button>
           </div>
         </div>

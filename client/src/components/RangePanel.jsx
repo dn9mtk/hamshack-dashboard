@@ -5,6 +5,7 @@
  */
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { gridCenter } from "../lib/grid.js";
+import { GLOSSARY } from "../lib/glossary.js";
 
 const HORIZON_HEIGHT_KEY = "hamshack_horizon_height";
 const CAROUSEL_ITEMS = [
@@ -12,7 +13,6 @@ const CAROUSEL_ITEMS = [
   { id: "linkbudget", label: "Link Budget" },
   { id: "terrain", label: "Terrain" },
 ];
-
 function loadHorizonHeight() {
   try {
     const v = parseFloat(localStorage.getItem(HORIZON_HEIGHT_KEY));
@@ -102,7 +102,6 @@ export default function RangePanel({ locator, rigFreq, onHorizonChange }) {
   }, [qth, horizonResults, onHorizonChange]);
 
   const currentId = CAROUSEL_ITEMS[index]?.id;
-
   const currentLabel = CAROUSEL_ITEMS[index]?.label ?? "";
 
   return (
@@ -219,11 +218,11 @@ export default function RangePanel({ locator, rigFreq, onHorizonChange }) {
                   </div>
                   {lb && (
                     <div className="range-results-card">
-                      <div className="range-results-row">
+                      <div className="range-results-row" title={GLOSSARY.EIRP ? `${GLOSSARY.EIRP.full}: ${GLOSSARY.EIRP.def}` : undefined}>
                         <span className="range-results-label">EIRP</span>
                         <span className="range-results-value">{lb.eirp.toFixed(0)} dBm</span>
                       </div>
-                      <div className="range-results-row">
+                      <div className="range-results-row" title={GLOSSARY.FSPL ? `${GLOSSARY.FSPL.full}: ${GLOSSARY.FSPL.def}` : undefined}>
                         <span className="range-results-label">FSPL</span>
                         <span className="range-results-value">{lb.fspl.toFixed(0)} dB</span>
                       </div>
@@ -281,14 +280,14 @@ export default function RangePanel({ locator, rigFreq, onHorizonChange }) {
       >
         <div className="news-slider-nav-row">
           <button type="button" className="news-slider-btn" onClick={() => go(-1)} aria-label="Previous section">
-            ‹
+            &#60;
           </button>
           <span className="news-slider-counter" aria-live="polite">
             <span className="range-nav-label">{currentLabel}</span>
             <span className="range-nav-index">{index + 1} / {CAROUSEL_ITEMS.length}</span>
           </span>
           <button type="button" className="news-slider-btn" onClick={() => go(1)} aria-label="Next section">
-            ›
+            &#62;
           </button>
         </div>
       </div>

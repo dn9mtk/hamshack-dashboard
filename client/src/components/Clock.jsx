@@ -33,7 +33,10 @@ export default function Clock({ sunData }) {
       <div style={{ fontWeight: 800, fontSize: 16 }}>UTC {fmtUtc(now)}</div>
       <div style={{ color: "rgba(255,255,255,0.68)", fontSize: 13 }}>Local {fmtLocal(now)}</div>
       {today && (
-        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginTop: 2 }}>
+        <div
+          style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginTop: 2 }}
+          title="Sunrise/sunset UTC. The grayline (dawn/dusk band) often gives excellent long-path DX."
+        >
           Sun ↑ {fmtUtcHhMm(today.sunriseUtc)}  ↓ {fmtUtcHhMm(today.sunsetUtc)} UTC
         </div>
       )}

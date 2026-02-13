@@ -18,7 +18,23 @@ import LogbookPanel from "./components/LogbookPanel.jsx";
 import RigDisplay from "./components/RigDisplay.jsx";
 import RefPanel from "./components/RefPanel.jsx";
 import RangePanel from "./components/RangePanel.jsx";
+import ChatAssistant from "./components/ChatAssistant.jsx";
+import HelpOverlay from "./components/HelpOverlay.jsx";
 import { loadRigFreq, saveRigFreq } from "./lib/rigFreqStorage.js";
+import { gridCenter } from "./lib/grid.js";
+
+function horizonKm(h1, h2) {
+  if (!Number.isFinite(h1) || !Number.isFinite(h2) || h1 < 0 || h2 < 0) return null;
+  return 4.12 * (Math.sqrt(h1) + Math.sqrt(h2));
+}
+function loadHorizonHeight() {
+  try {
+    const v = parseFloat(localStorage.getItem("hamshack_horizon_height"));
+    return Number.isFinite(v) && v >= 0 ? v : 11;
+  } catch {
+    return 11;
+  }
+}
 
 const SIDEBAR_TAB_KEY = "hamshack_sidebar_tab";
 const SIDEBAR_TABS = [
@@ -47,7 +63,7 @@ function getInitialTab() {
 }
 
 export default function App() {
-  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "", heyWhatsThatViewId: "" });
+  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dxpeditionsFilter, setDxpeditionsFilter] = useState("all"); // "all" | "active" | "upcoming"
   const [repeatersBandFilter, setRepeatersBandFilter] = useState("2m"); // "2m" | "70cm" | "10m"
@@ -57,6 +73,8 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState(getInitialTab);
   const [rigFreq, setRigFreq] = useState(loadRigFreq);
   const [radioHorizon, setRadioHorizon] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   function handleRigFreqChange(value) {
     setRigFreq(value);
@@ -78,12 +96,50 @@ export default function App() {
         locator: data.locator ?? "—",
         qthName: data.qthName ?? "",
         pwsStationId: data.pwsStationId ?? "",
-        heyWhatsThatViewId: data.heyWhatsThatViewId ?? ""
+        lat: data.lat,
+        lon: data.lon,
+        elevation: data.elevation
       }))
       .catch(() => {});
   }
 
   useEffect(() => { loadConfig(); }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const target = e.target;
+        if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
+        e.preventDefault();
+        setHelpOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Compute radio horizon from config so Range circles show without opening Range tab
+  useEffect(() => {
+    const lat = Number(config.lat);
+    const lon = Number(config.lon);
+    const loc = (config.locator || "").trim();
+    const qth = (Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180)
+      ? { lat, lon }
+      : (loc && loc !== "—" && loc.length >= 4 ? gridCenter(loc) : null);
+    if (!qth || !Number.isFinite(qth.lat) || !Number.isFinite(qth.lon)) {
+      setRadioHorizon(null);
+      return;
+    }
+    const h1 = loadHorizonHeight();
+    const ground = horizonKm(h1, 0);
+    if (ground == null) return;
+    setRadioHorizon({
+      center: qth,
+      ground,
+      mobile: horizonKm(h1, 2),
+      base: horizonKm(h1, 10)
+    });
+  }, [config.locator, config.lat, config.lon]);
 
   useEffect(() => {
     function loadSun() {
@@ -116,6 +172,30 @@ export default function App() {
         <div className="topbar-actions">
           <button
             type="button"
+            className="btn-settings btn-chat"
+            onClick={() => setChatOpen(true)}
+            aria-label="Open AI assistant"
+            title="AI Assistant"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 3 10.09 8.81a2 2 0 0 1-1.27 1.27L3 12l5.81 1.91a2 2 0 0 1 1.27 1.27L12 21l1.91-5.81a2 2 0 0 1 1.27-1.27L21 12l-5.81-1.91a2 2 0 0 1-1.27-1.27L12 3Z"/>
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="btn-settings"
+            onClick={() => setHelpOpen(true)}
+            aria-label="Quick reference (?)"
+            title="Quick reference (?)"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <path d="M12 17h.01"/>
+            </svg>
+          </button>
+          <button
+            type="button"
             className="btn-settings"
             onClick={() => setSettingsOpen(true)}
             aria-label="Open settings"
@@ -134,8 +214,19 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onSaved={loadConfig}
       />
+      <ChatAssistant
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        context={{
+          panel: sidebarTab,
+          locator: config.locator,
+          callsign: config.callsign,
+          qthName: config.qthName
+        }}
+      />
 
       <AlertsBar />
+      <HelpOverlay open={helpOpen} onClose={() => setHelpOpen(false)} />
 
       <main className="grid">
         <aside className="sidebar sidebar-onepage">

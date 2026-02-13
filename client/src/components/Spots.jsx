@@ -177,7 +177,7 @@ export default function Spots() {
                   onClick={() => go(-1)}
                   aria-label="Previous spot"
                 >
-                  ‹
+                  &#60;
                 </button>
                 <span className="news-slider-counter" aria-live="polite">
                   {index + 1} / {spots.length}
@@ -188,7 +188,7 @@ export default function Spots() {
                   onClick={() => go(1)}
                   aria-label="Next spot"
                 >
-                  ›
+                  &#62;
                 </button>
               </div>
             </div>

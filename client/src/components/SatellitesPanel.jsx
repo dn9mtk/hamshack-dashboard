@@ -162,7 +162,7 @@ export default function SatellitesPanel() {
                 onClick={() => go(-1)}
                 aria-label="Previous satellite"
               >
-                ‹
+                &#60;
               </button>
               <span className="news-slider-counter" aria-live="polite">
                 {index + 1} / {positions.length}
@@ -173,7 +173,7 @@ export default function SatellitesPanel() {
                 onClick={() => go(1)}
                 aria-label="Next satellite"
               >
-                ›
+                &#62;
               </button>
             </div>
           </div>

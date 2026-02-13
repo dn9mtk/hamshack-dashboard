@@ -1,0 +1,9 @@
+{
+  "phonetik": ["A Alpha", "B Bravo", "C Charlie", "D Delta", "E Echo", "F Foxtrot", "G Golf", "H Hotel", "I India", "J Juliett", "K Kilo", "L Lima", "M Mike", "N November", "O Oscar", "P Papa", "Q Quebec", "R Romeo", "S Sierra", "T Tango", "U Uniform", "V Victor", "W Whiskey", "X X-ray", "Y Yankee", "Z Zulu"],
+  "rst": [
+    { "title": "R (Readability)", "items": ["1 Unreadable", "2 Barely readable", "3 Readable with difficulty", "4 Readable", "5 Perfectly readable"] },
+    { "title": "S (Strength)", "items": ["1 Faint", "2 Very weak", "3 Weak", "4 Fair", "5 Moderate", "6 Good", "7 Moderately strong", "8 Strong", "9 Very strong"] },
+    { "title": "T (Tone, CW)", "items": ["1 Very rough", "2 Rough", "3 Clean", "4 Clean", "5 Musical", "6 Musical", "7 Pure tone", "8 Pure tone", "9 Pure tone"] }
+  ],
+  "qcodes": ["QRA Name?", "QRG Freq?", "QRL Busy?", "QRM Interference", "QRN Static", "QRO Increase power", "QRP Low power", "QRQ Faster", "QRS Slower", "QRT Stop", "QRV Ready", "QRX Wait", "QRZ Who calls?", "QSB Fading", "QSL Confirm", "QSO Contact", "QSY Change freq", "QTH Location"]
+}

@@ -15,6 +15,7 @@ dist-electron/
 # Local / generated data (keep .env.example and server data except below)
 server/data/config.json
 server/data/repeaters.json
+server/data/antennas.pdf
 
 # OS and editor
 .DS_Store

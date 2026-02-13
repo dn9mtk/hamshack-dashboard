@@ -167,18 +167,18 @@ export default function DXpeditions({ filter = FILTER_ALL, onFilterChange }) {
               onClick={() => go(-1)}
               aria-label="Previous DXpedition"
             >
-              ‹
-            </button>
-            <span className="news-slider-counter" aria-live="polite">
-              {index + 1} / {filteredItems.length}
-            </span>
-            <button
-              type="button"
-              className="news-slider-btn"
-              onClick={() => go(1)}
-              aria-label="Next DXpedition"
-            >
-              ›
+&#60;
+              </button>
+              <span className="news-slider-counter" aria-live="polite">
+                {index + 1} / {filteredItems.length}
+              </span>
+              <button
+                type="button"
+                className="news-slider-btn"
+                onClick={() => go(1)}
+                aria-label="Next DXpedition"
+              >
+                &#62;
             </button>
           </div>
         </div>

@@ -276,11 +276,11 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
             onKeyDown={handleKeyDown}
           >
             <div className="news-slider-nav-row">
-              <button type="button" className="news-slider-btn" onClick={() => go(-1)} aria-label="Vorheriger Repeater">‹</button>
+              <button type="button" className="news-slider-btn" onClick={() => go(-1)} aria-label="Vorheriger Repeater">&#60;</button>
               <span className="news-slider-counter" aria-live="polite">
                 {index + 1} / {filteredItems.length}
               </span>
-              <button type="button" className="news-slider-btn" onClick={() => go(1)} aria-label="Nächster Repeater">›</button>
+              <button type="button" className="news-slider-btn" onClick={() => go(1)} aria-label="Nächster Repeater">&#62;</button>
             </div>
           </div>
         )}

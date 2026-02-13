@@ -1,0 +1,13 @@
+# Antennen-Referenz (Beispiel)
+# Umbenennen zu antennas.txt (ohne .example)
+#
+# Bei grossen PDFs (>15 MB): Text extrahieren mit
+#   pdftotext dein_antennen.pdf antennas.txt
+# (Poppler: apt install poppler-utils / choco install poppler)
+# Dann erste ~12.000 Zeichen werden genutzt.
+#
+# Oder: Nur die wichtigen Abschnitte hier reinkopieren.
+
+Dipol 20m: 10m Länge pro Arm, Resonanz ~14.1 MHz.
+Endgespeiste Antenne: 20m lang für 20m Band.
+Magnetische Schleife: Kleiner Footprint, schmalbandig.

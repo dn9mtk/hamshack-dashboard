@@ -238,7 +238,7 @@ export default function ContestsPanel() {
                 onClick={() => go(-1)}
                 aria-label="Previous contest"
               >
-                ‹
+                &#60;
               </button>
               <span className="news-slider-counter" aria-live="polite">
                 {index + 1} / {filteredItems.length}
@@ -249,7 +249,7 @@ export default function ContestsPanel() {
                 onClick={() => go(1)}
                 aria-label="Next contest"
               >
-                ›
+                &#62;
               </button>
             </div>
           </div>

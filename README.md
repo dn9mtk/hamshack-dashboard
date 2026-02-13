@@ -196,6 +196,45 @@ export DXCLUSTER_CALLSIGN=YOURCALL
 - `reversebeacon.net:7000`
 - `rbn.telegraphy.de:7000`
 
+### AI Assistant (Ollama)
+
+The chat assistant uses **Ollama** (local, free). Set these in `server/.env` when deploying:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_URL` | `http://localhost:11434/v1` | Ollama API base URL |
+| `OLLAMA_MODEL` | `llama3.2` | Model name (must be pulled) |
+
+**Same machine:** Install [Ollama](https://ollama.com), run `ollama serve` (or start as service), then:
+
+```bash
+ollama pull llama3.2
+```
+
+**Different machine:** If Ollama runs on another host (e.g. `192.168.1.20`):
+
+```env
+OLLAMA_URL=http://192.168.1.20:11434/v1
+OLLAMA_MODEL=llama3.2
+```
+
+**Docker / Docker Compose:** Run Ollama in a container and point the app to it:
+
+```yaml
+# docker-compose.yml example
+services:
+  ollama:
+    image: ollama/ollama
+    ports: ["11434:11434"]
+  app:
+    build: .
+    environment:
+      OLLAMA_URL: http://ollama:11434/v1
+      OLLAMA_MODEL: llama3.2
+```
+
+**Without Ollama:** The dashboard works normally; the chat returns "Ollama not running". No API key required.
+
 **Note:** The app works without DX Cluster/RBN configuration - you just won't receive real-time spots. Space weather, ISS tracking, and QTH display will still work.
 
 ### Quick Setup Script

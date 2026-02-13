@@ -26,7 +26,7 @@ When adding or changing UI (client/src, styles.css), **always follow the existin
 - **Card:** **`.news-slider-card`** (rounded, subtle border, min-height).
 - **Content link/block:** **`.news-slider-link`** (flex column, padding). Use for clickable items or static blocks.
 - **Title:** **`.news-slider-title`**; **`.news-slider-date`** for secondary text; **`.news-slider-hint`** for “Read more” style.
-- **Navigation:** **`.news-slider-nav`** with **`.news-slider-nav-row`**: prev button, **`.news-slider-counter`** (e.g. 1 / 5), next button. Use **`news-slider-btn`** for prev/next. Support arrow keys (tabIndex, onKeyDown).
+- **Navigation:** **`.news-slider-nav`** with **`.news-slider-nav-row`**: prev button, **`.news-slider-counter`** (e.g. 1 / 5), next button. Use **`news-slider-btn`** for prev/next. Nav as **sibling below** the card (never inside). Support arrow keys (tabIndex, onKeyDown).
 - Use this same pattern for News, Contests, DXpeditions, Spots, Satellites (one “item” at a time, optional carousel).
 
 ## Filter Toggles

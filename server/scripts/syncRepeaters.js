@@ -85,9 +85,17 @@ async function run() {
     if (!Number.isFinite(freq)) continue;
     const band = freqToRepeaterBand(freq >= 1000 ? freq / 1000 : freq);
     if (!band) continue;
-    let lat = Number(row.rpt_lat ?? row.latitude ?? row.Latitude ?? row.lat);
-    let lon = Number(row.rpt_lon ?? row.longitude ?? row.Longitude ?? row.lon);
-    const city = String(row.rpt_city ?? row.city ?? row.Location ?? row["Nearest City"] ?? "").trim();
+    let lat = Number(row.rpt_lat ?? row.Lat ?? row.latitude ?? row.Latitude ?? row.lat);
+    let lon = Number(row.rpt_lon ?? row.Long ?? row.longitude ?? row.Longitude ?? row.lon);
+    const cityRaw = String(row.rpt_city ?? row.city ?? row.Location ?? row["Nearest City"] ?? "").trim();
+    const landmark = String(row.Landmark ?? row.landmark ?? "").trim();
+    // Disambiguate using landmark (RepeaterBook often has "Bad Soden" + "Salmuenster" -> Bad Soden-Salmünster)
+    let city = cityRaw;
+    if (landmark && cityRaw) {
+      const lm = landmark.toLowerCase();
+      if (lm.includes("salmünster") || lm.includes("salmuenster")) city = "Bad Soden-Salmünster";
+      else if (lm.includes("taunus") && cityRaw.toLowerCase().includes("bad soden")) city = "Bad Soden am Taunus";
+    }
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !inGermanyBbox(lat, lon)) {
       lat = null;
       lon = null;

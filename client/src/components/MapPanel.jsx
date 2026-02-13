@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import { terminatorSegments, nightPolygons } from "../lib/terminator.js";
+import { GLOSSARY } from "../lib/glossary.js";
 import { buildSpotQuery } from "../lib/spotsQuery.js";
 import { gridCenter } from "../lib/grid.js";
 import { formatDateRange } from "../lib/time.js";
@@ -272,6 +273,7 @@ export default function MapPanel({
   const satellitesLayerRef = useRef(null);
   const satelliteRangeLayerRef = useRef(null);
   const horizonLayerRef = useRef(null);
+  const qthMarkerRef = useRef(null);
   const currentFiltersRef = useRef(loadSavedFilters());
 
   const [mapReady, setMapReady] = useState(false);
@@ -756,34 +758,7 @@ export default function MapPanel({
         });
     });
 
-    // QTH marker from server (house icon)
-    const qthHouseHtml = `
-      <div class="qth-house-marker" style="width:28px;height:28px;display:flex;align-items:flex-end;justify-content:center;">
-        <svg viewBox="0 0 24 24" width="24" height="24" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));">
-          <path d="M12 2L2 10v12h7v-7h6v7h7V10L12 2z" fill="#ff6b6b" stroke="#c92a2a" stroke-width="1.2"/>
-        </svg>
-      </div>
-    `;
-    fetch("/api/qth")
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(q => {
-        if (!Number.isFinite(q.lat) || !Number.isFinite(q.lon)) return;
-        const qth = L.marker([q.lat, q.lon], {
-          icon: L.divIcon({
-            className: "qth-house-marker",
-            html: qthHouseHtml,
-            iconSize: [28, 28],
-            iconAnchor: [14, 28]
-          })
-        }).addTo(map);
-        qth.bindTooltip(`${q.callsign} · ${q.locator}`, { direction: "top" });
-      })
-      .catch(err => {
-        console.warn("Failed to load QTH:", err);
-      });
+    // QTH marker (house icon) – position updated via effect when radioHorizon changes
 
       // Fix layout sizing: invalidate and re-center when container gets size
       const scheduleInvalidate = () => {
@@ -1271,7 +1246,7 @@ export default function MapPanel({
     };
   }, [selectedSatId, mapReady]);
 
-  // Radio horizon circles (from Range panel) – ground, mobile, base, each different color
+  // Radio horizon circles + terrain horizon polygon (from Range panel / API)
   useEffect(() => {
     const map = mapRef.current;
     const layer = horizonLayerRef.current;
@@ -1282,6 +1257,8 @@ export default function MapPanel({
     if (!horizonLayerOn || !radioHorizon || !map) return;
     const { center, ground, mobile, base } = radioHorizon;
     if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lon)) return;
+    const pane = map.getPane("horizonPane") || map.createPane("horizonPane");
+    pane.style.zIndex = 650;
     const group = L.layerGroup();
     [
       { km: ground, key: "ground" },
@@ -1295,7 +1272,8 @@ export default function MapPanel({
         color: c.color,
         fillColor: c.fill,
         fillOpacity: 1,
-        weight: 2
+        weight: 2,
+        pane: "horizonPane"
       });
       group.addLayer(circle);
     });
@@ -1303,13 +1281,91 @@ export default function MapPanel({
       group.addTo(map);
       horizonLayerRef.current = group;
     }
+
+    let cancelled = false;
+    const h = (() => {
+      try {
+        const v = parseFloat(localStorage.getItem("hamshack_horizon_height"));
+        return Number.isFinite(v) && v >= 0 ? v : 11;
+      } catch { return 11; }
+    })();
+    fetch(`/api/horizon/terrain?h=${encodeURIComponent(h)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((geo) => {
+        if (cancelled || !horizonLayerRef.current || !mapRef.current) return;
+        const coords = geo?.geometry?.coordinates?.[0];
+        if (!Array.isArray(coords) || coords.length < 3) return;
+        const latLngs = coords.map(([lon, lat]) => [lat, lon]);
+        const poly = L.polygon(latLngs, {
+          color: "rgba(147, 51, 234, 0.9)",
+          fillColor: "rgba(147, 51, 234, 0.25)",
+          fillOpacity: 1,
+          weight: 2,
+          pane: "horizonPane"
+        });
+        horizonLayerRef.current.addLayer(poly);
+      })
+      .catch(() => {});
+
     return () => {
+      cancelled = true;
       if (map && horizonLayerRef.current && map.hasLayer(horizonLayerRef.current)) {
         map.removeLayer(horizonLayerRef.current);
       }
       horizonLayerRef.current = null;
     };
   }, [horizonLayerOn, radioHorizon, mapReady]);
+
+  // QTH marker (house icon) at configured coordinates – updates when radioHorizon/config changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const center = radioHorizon?.center;
+    if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lon)) {
+      if (qthMarkerRef.current) {
+        map.removeLayer(qthMarkerRef.current);
+        qthMarkerRef.current = null;
+      }
+      return;
+    }
+    const qthHouseHtml = `
+      <div class="qth-house-marker" style="width:28px;height:28px;display:flex;align-items:flex-end;justify-content:center;">
+        <svg viewBox="0 0 24 24" width="24" height="24" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));">
+          <path d="M12 2L2 10v12h7v-7h6v7h7V10L12 2z" fill="#ff6b6b" stroke="#c92a2a" stroke-width="1.2"/>
+        </svg>
+      </div>
+    `;
+    const placeMarker = (q) => {
+      if (qthMarkerRef.current) map.removeLayer(qthMarkerRef.current);
+      const lat = Number.isFinite(q?.lat) ? q.lat : center.lat;
+      const lon = Number.isFinite(q?.lon) ? q.lon : center.lon;
+      const marker = L.marker([lat, lon], {
+        icon: L.divIcon({
+          className: "qth-house-marker",
+          html: qthHouseHtml,
+          iconSize: [28, 28],
+          iconAnchor: [14, 28]
+        })
+      }).addTo(map);
+      marker.bindTooltip(`${q.callsign || "QTH"} · ${q.locator || ""}`, { direction: "top" });
+      qthMarkerRef.current = marker;
+    };
+    fetch("/api/qth")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((q) => {
+        if (!q || !Number.isFinite(q.lat) || !Number.isFinite(q.lon)) return;
+        placeMarker(q);
+      })
+      .catch(() => {
+        placeMarker({ callsign: "QTH", locator: "" });
+      });
+    return () => {
+      if (qthMarkerRef.current && map.hasLayer(qthMarkerRef.current)) {
+        map.removeLayer(qthMarkerRef.current);
+      }
+      qthMarkerRef.current = null;
+    };
+  }, [mapReady, radioHorizon?.center?.lat, radioHorizon?.center?.lon]);
 
   // Space summary for propagation bar
   useEffect(() => {
@@ -1710,6 +1766,10 @@ export default function MapPanel({
               <div className="map-legend-box" style={{ border: "2px solid rgba(77,171,247,0.6)" }}>
                 <div className="map-legend-title">Range</div>
                 <div className="map-legend-row">
+                  <span className="map-legend-item">
+                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "rgba(147,51,234,0.5)", borderColor: "rgba(147,51,234,0.9)" }} />
+                    <span className="map-legend-label">Terrain</span>
+                  </span>
                   {radioHorizon.ground != null && (
                     <span className="map-legend-item">
                       <span className="map-legend-dot map-legend-dot--circle" style={{ background: "rgba(230,119,0,0.6)", borderColor: "rgba(230,119,0,0.9)" }} />
@@ -1779,7 +1839,7 @@ export default function MapPanel({
           }}
         >
           {mapView === "MUF" && (
-            <div>
+            <div title={GLOSSARY.MUF ? `${GLOSSARY.MUF.full}: ${GLOSSARY.MUF.def}` : undefined}>
               <div style={{ fontWeight: 700, marginBottom: 4, color: "rgba(255,255,255,0.95)" }}>MUF (est.)</div>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div
@@ -1799,7 +1859,7 @@ export default function MapPanel({
             </div>
           )}
           {mapView !== "none" && mapView !== "MUF" && mapView !== "LUF" && VIEW_OPTIONS.includes(mapView) && (
-            <div>
+            <div title={GLOSSARY["band status"] ? `${GLOSSARY["band status"].full}: ${GLOSSARY["band status"].def}` : undefined}>
               <div style={{ fontWeight: 700, marginBottom: 2, color: "rgba(255,255,255,0.95)" }}>Band {mapView} MHz</div>
               <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>
                 {bandGridSource === "spots"
@@ -1825,7 +1885,7 @@ export default function MapPanel({
             </div>
           )}
           {mapView === "LUF" && (
-            <div>
+            <div title={GLOSSARY["D-RAP"] ? `${GLOSSARY["D-RAP"].full}: ${GLOSSARY["D-RAP"].def}` : undefined}>
               <div style={{ fontWeight: 700, marginBottom: 4, color: "rgba(255,255,255,0.95)" }}>LUF / D-RAP</div>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div

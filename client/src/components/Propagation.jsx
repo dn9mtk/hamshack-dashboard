@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { formatDateTimeUtc } from "../lib/time.js";
 import PanelLoading from "./PanelLoading.jsx";
 import PanelError from "./PanelError.jsx";
+import InfoTooltip from "./InfoTooltip.jsx";
 
 const STATUS_COLOR = { open: "#37b24d", marginal: "#f59f00", closed: "#868e96", disturbed: "#f03e3e" };
 
@@ -46,7 +47,9 @@ export default function Propagation() {
     <div style={{ display: "grid", gap: 10 }}>
       {/* MUF value */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-        <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 13 }}>MUF (est.)</span>
+        <InfoTooltip term="MUF">
+          <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 13 }}>MUF (est.)</span>
+        </InfoTooltip>
         <span style={{ fontWeight: 800, fontSize: 18 }}>{data.mufMHz != null ? `${data.mufMHz} MHz` : "—"}</span>
       </div>
 
@@ -105,7 +108,7 @@ export default function Propagation() {
       </div>
 
       <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
-        SFI {data.sfi ?? "—"} · Kp {data.kp ?? "—"}
+        <InfoTooltip term="SFI"><span>SFI</span></InfoTooltip> {data.sfi ?? "—"} · <InfoTooltip term="Kp"><span>Kp</span></InfoTooltip> {data.kp ?? "—"}
       </div>
       <div style={{ display: "grid", gap: 6 }}>
         {(data.bands || []).map((b) => (
@@ -131,7 +134,7 @@ export default function Propagation() {
         Updated: {formatDateTimeUtc(data.updated)}
       </div>
       <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>
-        Full prediction from MUF at your QTH (SFI + solar zenith).
+        Full prediction from <InfoTooltip term="MUF"><span>MUF</span></InfoTooltip> at your <InfoTooltip term="QTH"><span>QTH</span></InfoTooltip> (SFI + solar zenith).
       </div>
     </div>
   );

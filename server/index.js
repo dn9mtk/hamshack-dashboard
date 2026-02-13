@@ -8,6 +8,8 @@ import { fileURLToPath } from "url";
 import fetch from "node-fetch";
 import { XMLParser } from "fast-xml-parser";
 import * as sat from "satellite.js";
+import OpenAI from "openai";
+import { search as ddgSearch } from "duck-duck-scrape";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,14 +104,42 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId", "heyWhatsThatViewId"];
-app.post("/api/config", (req, res) => {
-  const body = req.body || {};
-  const updates = {};
-  for (const k of CONFIG_KEYS) if (body[k] !== undefined) updates[k] = body[k];
-  CONFIG = { ...CONFIG, ...updates };
-  writeConfig(CONFIG);
-  res.json({ ok: true, config: CONFIG });
+const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId", "lat", "lon", "elevation"];
+app.post("/api/config", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const updates = {};
+    for (const k of CONFIG_KEYS) if (body[k] !== undefined) updates[k] = body[k];
+    let lat = updates.lat != null && updates.lat !== "" ? Number(updates.lat) : NaN;
+    let lon = updates.lon != null && updates.lon !== "" ? Number(updates.lon) : NaN;
+    if (!Number.isFinite(lat)) lat = body.lat != null && body.lat !== "" ? Number(body.lat) : NaN;
+    if (!Number.isFinite(lon)) lon = body.lon != null && body.lon !== "" ? Number(body.lon) : NaN;
+    const hasWgs84 = Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+    if (hasWgs84) {
+      updates.locator = latLonToLocator(lat, lon) || updates.locator || CONFIG.locator;
+    } else {
+      const loc = (updates.locator ?? CONFIG.locator)?.trim().toUpperCase();
+      const p = loc ? locatorToLatLon(loc) : null;
+      if (p) { lat = p.lat; lon = p.lon; updates.lat = lat; updates.lon = lon; }
+    }
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      try {
+        const er = await fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`);
+        if (er.ok) {
+          const ej = await er.json();
+          const elev = ej?.results?.[0]?.elevation;
+          if (Number.isFinite(elev)) updates.elevation = Math.round(elev);
+        }
+      } catch {
+        /* keep existing elevation */
+      }
+    }
+    CONFIG = { ...CONFIG, ...updates };
+    writeConfig(CONFIG);
+    res.json({ ok: true, config: CONFIG });
+  } catch (e) {
+    res.status(500).json({ error: "config_save_failed", detail: String(e) });
+  }
 });
 
 // --------------------
@@ -152,9 +182,29 @@ function locatorToLatLon(locator) {
   return { lat, lon };
 }
 
+/** Lat/lon (WGS84) -> Maidenhead locator (6-char) */
+function latLonToLocator(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const A = "A".charCodeAt(0);
+  let lon2 = lon + 180;
+  let lat2 = lat + 90;
+  const f1 = Math.floor(lon2 / 20);
+  const f2 = Math.floor(lat2 / 10);
+  lon2 %= 20;
+  lat2 %= 10;
+  const s1 = Math.floor(lon2 / 2);
+  const s2 = Math.floor(lat2 / 1);
+  lon2 %= 2;
+  lat2 %= 1;
+  const sub1 = Math.floor(lon2 / (2 / 24));
+  const sub2 = Math.floor(lat2 / (1 / 24));
+  const c = (n) => String.fromCharCode(A + Math.min(23, Math.max(0, n)));
+  return c(f1) + c(f2) + String(s1) + String(s2) + c(sub1) + c(sub2);
+}
+
 app.get("/api/qth", (req, res) => {
-  const p = locatorToLatLon(CONFIG.locator);
-  res.json({ ...CONFIG, ...(p || {}) });
+  const q = getQth();
+  res.json({ ...CONFIG, ...(q || {}) });
 });
 
 // --------------------
@@ -180,6 +230,23 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
     Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
   const brng = (toDeg(Math.atan2(y, x)) + 360) % 360;
   return brng;
+}
+
+/** Lat/lon of point at given bearing and distance from start (WGS84) */
+function destinationPoint(lat, lon, bearingDeg, distanceKm) {
+  const R = 6371; // Earth radius km
+  const d = distanceKm / R;
+  const br = toRad(bearingDeg);
+  const lat1 = toRad(lat);
+  const lon1 = toRad(lon);
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(br)
+  );
+  const lon2 = lon1 + Math.atan2(
+    Math.sin(br) * Math.sin(d) * Math.cos(lat1),
+    Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+  );
+  return { lat: toDeg(lat2), lon: toDeg(lon2) };
 }
 
 // --------------------
@@ -345,8 +412,15 @@ function lufEstimateMHz(cosChi) {
   return 2 + 4 * Math.max(0, 1 - c);
 }
 
-/** Get QTH from CONFIG; null if invalid. Single source of truth for propagation. */
+/** Get QTH from CONFIG; null if invalid. Single source of truth for propagation. Prefers WGS84 lat/lon over locator. */
 function getQth() {
+  if (CONFIG.lat != null && CONFIG.lon != null) {
+    const lat = Number(CONFIG.lat);
+    const lon = Number(CONFIG.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+      return { lat, lon };
+    }
+  }
   return locatorToLatLon(CONFIG.locator);
 }
 
@@ -884,6 +958,116 @@ app.get("/api/propagation/path", async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: "path_forecast_failed", detail: String(e) });
+  }
+});
+
+// --------------------
+// Terrain horizon polygon (visibility cloak) – maßstabgetreu
+// Computes line-of-sight horizon using Open-Elevation, returns GeoJSON polygon
+// --------------------
+const R_EFF_KM = 6371 * (4 / 3); // 4/3 Earth radius for radio horizon
+app.get("/api/horizon/terrain", async (req, res) => {
+  try {
+    const fromQ = getQth();
+    if (!fromQ) return res.status(400).json({ error: "Invalid QTH locator", detail: "Set locator in config" });
+    const antennaHeightM = Number(req.query.h) || 11;
+
+    const NUM_BEARINGS = 72;
+    const STEP_KM = 2;
+    const MAX_KM = 60;
+    const distances = [];
+    for (let d = STEP_KM; d <= MAX_KM; d += STEP_KM) distances.push(d);
+
+    const points = [];
+    for (let b = 0; b < NUM_BEARINGS; b++) {
+      const bearing = (b / NUM_BEARINGS) * 360;
+      for (const dist of distances) {
+        const p = destinationPoint(fromQ.lat, fromQ.lon, bearing, dist);
+        points.push({ lat: p.lat, lon: p.lon, bearingIdx: b, distKm: dist });
+      }
+    }
+
+    const locs = points.map((p) => ({ latitude: p.lat, longitude: p.lon }));
+    const er = await fetch("https://api.open-elevation.com/api/v1/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locations: locs })
+    });
+    if (!er.ok) {
+      return res.status(502).json({ error: "Elevation service unavailable" });
+    }
+    const ej = await er.json();
+    const results = Array.isArray(ej?.results) ? ej.results : [];
+    if (results.length !== points.length) {
+      return res.status(502).json({ error: "Incomplete elevation data" });
+    }
+
+    for (let i = 0; i < points.length; i++) {
+      points[i].elevation = Number.isFinite(results[i]?.elevation) ? results[i].elevation : 0;
+    }
+
+    const qthElev = Number.isFinite(CONFIG.elevation)
+      ? CONFIG.elevation
+      : await (async () => {
+        try {
+          const r = await fetch(
+            `https://api.open-elevation.com/api/v1/lookup?locations=${fromQ.lat},${fromQ.lon}`
+          );
+          if (!r.ok) return 0;
+          const j = await r.json();
+          return Number.isFinite(j?.results?.[0]?.elevation) ? j.results[0].elevation : 0;
+        } catch {
+          return 0;
+        }
+      })();
+    const h1 = qthElev + antennaHeightM;
+
+    const horizonPoints = [];
+    for (let b = 0; b < NUM_BEARINGS; b++) {
+      const ray = points.filter((p) => p.bearingIdx === b).sort((a, b) => a.distKm - b.distKm);
+      let horizonLat = fromQ.lat;
+      let horizonLon = fromQ.lon;
+      let horizonDist = 0;
+      for (let j = 0; j < ray.length; j++) {
+        const pt = ray[j];
+        const d = pt.distKm;
+        const ePt = pt.elevation;
+        let blocked = false;
+        for (let k = 0; k <= j; k++) {
+          const pk = ray[k];
+          const dk = pk.distKm;
+          const tk = pk.elevation;
+          const losH = h1 + (ePt - h1) * (dk / d) - (dk * (d - dk)) / (2 * R_EFF_KM);
+          if (tk > losH + 5) {
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked) break;
+        horizonLat = pt.lat;
+        horizonLon = pt.lon;
+        horizonDist = d;
+      }
+      horizonPoints.push([horizonLon, horizonLat]);
+    }
+
+    const coords = horizonPoints;
+    if (coords.length < 3) {
+      return res.json({
+        type: "Feature",
+        properties: { source: "terrain", note: "insufficient points" },
+        geometry: { type: "Polygon", coordinates: [[]] }
+      });
+    }
+    coords.push(coords[0]);
+
+    res.json({
+      type: "Feature",
+      properties: { source: "terrain", antennaHeightM: antennaHeightM },
+      geometry: { type: "Polygon", coordinates: [coords] }
+    });
+  } catch (e) {
+    res.status(500).json({ error: "terrain_horizon_failed", detail: String(e) });
   }
 });
 
@@ -2329,33 +2513,33 @@ function parseContestsFromRss(xml) {
   return out.length ? out : null;
 }
 
-app.get("/api/contests", async (req, res) => {
+async function getContestItems() {
+  const cacheKey = "contests";
+  const now = Date.now();
+  const hit = cache.get(cacheKey);
+  if (hit && now - hit.t < CONTEST_CACHE_MS && hit.v?.length) return hit.v;
   try {
-    const cacheKey = "contests";
-    const now = Date.now();
-    const hit = cache.get(cacheKey);
-    let items = hit && now - hit.t < CONTEST_CACHE_MS ? hit.v : null;
-    if (!items || items.length === 0) {
-      try {
-        const r = await fetch(CONTEST_CALENDAR_RSS, {
-          headers: { "User-Agent": "HamshackDashboard/1.0", Accept: "application/rss+xml, application/xml, text/xml, */*" },
-          redirect: "follow"
-        });
-        if (r.ok) {
-          const text = await r.text();
-          const parsed = parseContestsFromRss(text);
-          if (parsed && parsed.length > 0) {
-            items = parsed;
-            cache.set(cacheKey, { t: now, v: items });
-          }
-        }
-      } catch (err) {
-        console.warn("Contests RSS fetch failed:", err?.message || err);
-      }
-      if (!items || items.length === 0) {
-        items = defaultContestList();
+    const r = await fetch(CONTEST_CALENDAR_RSS, {
+      headers: { "User-Agent": "HamshackDashboard/1.0", Accept: "application/rss+xml, application/xml, text/xml, */*" },
+      redirect: "follow"
+    });
+    if (r.ok) {
+      const text = await r.text();
+      const parsed = parseContestsFromRss(text);
+      if (parsed && parsed.length > 0) {
+        cache.set(cacheKey, { t: now, v: parsed });
+        return parsed;
       }
     }
+  } catch (err) {
+    console.warn("Contests RSS fetch failed:", err?.message || err);
+  }
+  return defaultContestList();
+}
+
+app.get("/api/contests", async (req, res) => {
+  try {
+    const items = await getContestItems();
     res.json({ items, updated: new Date().toISOString() });
   } catch (e) {
     res.json({ items: defaultContestList(), updated: new Date().toISOString() });
@@ -2386,6 +2570,519 @@ app.get("/api/repeaters", (req, res) => {
   } catch (e) {
     console.warn("Repeaters read failed:", e?.message || e);
     res.status(500).json({ error: "repeaters_failed", detail: String(e), items: [] });
+  }
+});
+
+// POST /api/chat – AI assistant (Ollama, local only)
+const CUSTOM_KNOWLEDGE_MAX_CHARS = 12000;
+const PDF_MAX_SIZE_MB = 15; // Larger PDFs: extract to antennas.txt manually
+
+function loadStaticChatData() {
+  const out = { bandplan: null, refs: null };
+  try {
+    const bpPath = path.join(DATA_DIR, "bandplan.json");
+    if (fs.existsSync(bpPath)) out.bandplan = JSON.parse(fs.readFileSync(bpPath, "utf8"));
+  } catch {}
+  try {
+    const refPath = path.join(DATA_DIR, "refs.json");
+    if (fs.existsSync(refPath)) out.refs = JSON.parse(fs.readFileSync(refPath, "utf8"));
+  } catch {}
+  return out;
+}
+
+async function loadCustomKnowledge() {
+  const txtPath = path.join(DATA_DIR, "antennas.txt");
+  const pdfPath = path.join(DATA_DIR, "antennas.pdf");
+  if (fs.existsSync(txtPath)) {
+    const fd = fs.openSync(txtPath, "r");
+    const maxBytes = (CUSTOM_KNOWLEDGE_MAX_CHARS + 1000) * 4;
+    const buf = Buffer.alloc(Math.min(maxBytes, fs.fstatSync(fd).size));
+    fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const text = buf.toString("utf8").trim();
+    return text.length > CUSTOM_KNOWLEDGE_MAX_CHARS ? text.slice(0, CUSTOM_KNOWLEDGE_MAX_CHARS) + "\n[… gekürzt]" : text;
+  }
+  if (fs.existsSync(pdfPath)) {
+    const stat = fs.statSync(pdfPath);
+    const sizeMB = stat.size / (1024 * 1024);
+    if (sizeMB > PDF_MAX_SIZE_MB) {
+      console.warn(`antennas.pdf is ${sizeMB.toFixed(1)} MB (max ${PDF_MAX_SIZE_MB} MB). Extract to antennas.txt with: pdftotext antennas.pdf antennas.txt`);
+      return null;
+    }
+    try {
+      const pdfParse = (await import("pdf-parse")).default;
+      const buffer = fs.readFileSync(pdfPath);
+      const { text } = await pdfParse(buffer, { max: 50 }); // first 50 pages only
+      const t = (text || "").trim().replace(/\s+/g, " ");
+      return t.length > CUSTOM_KNOWLEDGE_MAX_CHARS ? t.slice(0, CUSTOM_KNOWLEDGE_MAX_CHARS) + " [… gekürzt]" : t;
+    } catch (e) {
+      console.warn("PDF parse failed (install: npm i pdf-parse):", e?.message || e);
+    }
+  }
+  return null;
+}
+
+async function getChatContextData() {
+  const base = `http://127.0.0.1:${PORT}`;
+  const callsign = (CONFIG?.callsign || "").trim() || "DN9MTK";
+  const results = await Promise.allSettled([
+    fetch(`${base}/api/space/summary`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/sun`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/spots?limit=80`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/spots?spottedMe=1&limit=25`).then((r) => (r.ok ? r.json() : null)),
+    getContestItems().then((items) => (items ? { items } : null)),
+    fetch(`${base}/api/news`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/alerts`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/dxpeditions`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/weather/current`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/propagation`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/repeaters`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/pskreporter?callsign=${encodeURIComponent(callsign)}&limit=30`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/sat/list`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/beacons`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/beacons/status`).then((r) => (r.ok ? r.json() : null)),
+    fetch(`${base}/api/config`).then((r) => (r.ok ? r.json() : null))
+  ]);
+  const [space, sun, spots, spottedMe, contests, news, alerts, dxpeditions, weather, propagation, repeaters, psk, satList, beacons, beaconStatus, config] = results;
+  const staticData = loadStaticChatData();
+  const customKnowledge = await loadCustomKnowledge().catch(() => null);
+  return {
+    spaceWeather: space.status === "fulfilled" ? space.value : null,
+    sun: sun.status === "fulfilled" ? sun.value : null,
+    recentSpots: spots.status === "fulfilled" ? (spots.value?.spots || []).slice(0, 60) : [],
+    spottedMe: spottedMe.status === "fulfilled" ? (spottedMe.value?.spots || []).slice(0, 20) : [],
+    contests: contests.status === "fulfilled" && contests.value?.items ? contests.value.items.slice(0, 20) : [],
+    news: news.status === "fulfilled" ? (news.value?.items || []).slice(0, 15) : [],
+    alerts: alerts.status === "fulfilled" ? (alerts.value?.alerts || []) : [],
+    dxpeditions: dxpeditions.status === "fulfilled" ? (dxpeditions.value?.items || []).slice(0, 25) : [],
+    weather: weather.status === "fulfilled" ? weather.value : null,
+    propagation: propagation.status === "fulfilled" ? propagation.value : null,
+    repeaters: repeaters.status === "fulfilled" ? (repeaters.value?.items || []) : [],
+    pskReports: psk.status === "fulfilled" ? (psk.value?.reports || []).slice(0, 30) : [],
+    satellites: satList.status === "fulfilled" ? (satList.value?.items || []).slice(0, 25) : [],
+    beacons: beacons.status === "fulfilled" ? beacons.value : null,
+    beaconStatus: beaconStatus.status === "fulfilled" ? beaconStatus.value : null,
+    config: config.status === "fulfilled" ? config.value : null,
+    bandplan: staticData.bandplan,
+    refs: staticData.refs,
+    customKnowledge
+  };
+}
+
+function buildReadyAnswers(ctx, liveData) {
+  const callsign = ctx.config?.callsign || "—";
+  const locator = ctx.config?.locator || "—";
+  const qthName = ctx.config?.qthName || "";
+  const now = new Date();
+  const out = {};
+
+  // Next contest
+  const nc = ctx.nextContest;
+  out.nextContest = nc
+    ? `The next contest is ${nc.name} (${nc.type || "Mixed"}), starting ${nc.startReadable || nc.start}.`
+    : "No upcoming contests in the data.";
+
+  // Next 3 contests (for "which contests are coming")
+  const cl = (ctx.contests || []).slice(0, 3);
+  if (cl.length > 0) {
+    out.nextContests = cl
+      .filter((c) => c.startTime)
+      .map((c) => {
+        const d = new Date(c.startTime);
+        return `${c.name} (${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })})`;
+      })
+      .join(". ") || out.nextContest;
+  } else {
+    out.nextContests = out.nextContest;
+  }
+
+  // Nearest repeater(s)
+  const nr = ctx.nearestRepeaters || [];
+  if (nr.length > 0) {
+    const first = nr[0];
+    out.nearestRepeater = `The nearest repeater to your QTH (${locator}${qthName ? " " + qthName : ""}) is ${first.callsign} in ${first.city || "—"}, ${first.distKm} km away, ${first.band} band, ${first.freq} MHz.`;
+    out.nearestRepeatersList = nr.slice(0, 5).map((r) => `${r.callsign} (${r.city}, ${r.distKm} km)`).join("; ");
+  } else {
+    out.nearestRepeater = "No repeater positions available. Run 'npm run sync-repeaters' to load repeater data with coordinates.";
+  }
+
+  // Propagation / band status
+  const bands = ctx.propagation?.bands || [];
+  const sfi = ctx.propagation?.sfi ?? ctx.spaceWeather?.solarFlux?.sfi;
+  const kp = ctx.propagation?.kp ?? ctx.spaceWeather?.kp?.kp;
+  if (bands.length > 0) {
+    const statusStr = bands.map((b) => `${b.name}: ${b.status}`).join(", ");
+    out.propagation = `Band status: ${statusStr}. SFI ${sfi ?? "—"}, Kp ${kp ?? "—"}.`;
+  } else {
+    out.propagation = sfi != null ? `SFI ${sfi}, Kp ${kp ?? "—"}. Band status not available.` : "Propagation data not available.";
+  }
+
+  // Grayline
+  const sun = ctx.sun?.today || liveData?.sun?.today;
+  if (sun?.sunriseUtc && sun?.sunsetUtc) {
+    const sr = new Date(sun.sunriseUtc);
+    const ss = new Date(sun.sunsetUtc);
+    const fmt = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false }) + " UTC";
+    out.grayline = `Sunrise ${fmt(sr)}, Sunset ${fmt(ss)}. Grayline DX is best ~30 min before sunrise and after sunset.`;
+  } else {
+    out.grayline = "Sun times not available (check locator in config).";
+  }
+
+  // Recent spots
+  const spots = ctx.recentSpots || [];
+  if (spots.length > 0) {
+    out.recentSpots = spots.slice(0, 8).map((s) => `${s.dx} ${s.freq} ${s.mode} by ${s.spotter}`).join("; ");
+  } else {
+    out.recentSpots = "No recent spots in the cluster.";
+  }
+
+  // Spotted me
+  const sm = liveData?.spottedMe || [];
+  if (sm.length > 0) {
+    out.spottedMe = `You (${callsign}) were spotted by: ${sm.slice(0, 5).map((s) => `${s.spotter} on ${s.freq} ${s.mode}`).join("; ")}`;
+  } else {
+    out.spottedMe = `No spots of ${callsign} in the recent cluster/RBN data.`;
+  }
+
+  // Active DXpeditions
+  const dxp = (ctx.dxpeditions || []).filter((d) => d.status === "active");
+  if (dxp.length > 0) {
+    out.activeDxpeditions = dxp.map((d) => `${d.callsign} (${d.entity})`).join("; ");
+  } else {
+    const upc = (ctx.dxpeditions || []).filter((d) => d.status === "upcoming").slice(0, 3);
+    out.activeDxpeditions = upc.length > 0 ? `No active. Upcoming: ${upc.map((d) => d.callsign + " " + d.entity).join("; ")}` : "No DXpedition data.";
+  }
+
+  // Weather
+  const w = ctx.weather;
+  if (w && typeof w.temp === "number") {
+    out.weather = `Temp ${Math.round(w.temp)}°C, humidity ${w.humidity ?? "—"}%, wind ${w.windSpeed ?? "—"} km/h.`;
+  } else {
+    out.weather = "Weather data not available.";
+  }
+
+  // Phonetics (ICAO) – for "how do I spell X"
+  const phonetik = ctx.refs?.phonetik || [];
+  if (phonetik.length > 0) {
+    out.phonetics = "ICAO alphabet: " + phonetik.slice(0, 13).map((p) => p.split(" ")[1]).join(", ") + " ...";
+  }
+
+  // Q-codes
+  const qcodes = ctx.refs?.qcodes || [];
+  if (qcodes.length > 0) {
+    out.qcodes = "Common Q-codes: " + qcodes.slice(0, 8).join("; ") + " (full list in refs).";
+  }
+
+  // RST
+  const rst = ctx.refs?.rst || [];
+  if (rst.length > 0) {
+    out.rst = rst.map((r) => `${r.title}: ${r.items.slice(0, 2).join(", ")}`).join(". ");
+  }
+
+  // Band plan – full IARU R1 data for AI (CW, SSB, digimodes, etc.)
+  const bp = ctx.bandplan;
+  if (bp) {
+    const toBandEntry = (b, unit) => {
+      const bandLabel = b.band || b.id || "";
+      return (b.segments || []).map((seg) => {
+        const freq = seg.freq || "";
+        const usage = (seg.usage || "").trim();
+        return { bandLabel, freq, usage, unit };
+      }).filter((x) => x.freq && x.usage);
+    };
+    const hfEntries = (bp.hf || []).flatMap((b) => toBandEntry(b, "kHz"));
+    const vhfUhfEntries = [...(bp.vhf || []), ...(bp.uhf || [])].flatMap((b) => toBandEntry(b, "MHz"));
+    const bandplanLines = [
+      ...hfEntries.map((e) => `${e.bandLabel}: ${e.freq} ${e.unit} → ${e.usage}`),
+      ...vhfUhfEntries.map((e) => `${e.bandLabel}: ${e.freq} ${e.unit} → ${e.usage}`)
+    ];
+    const cwEntries = [...hfEntries, ...vhfUhfEntries].filter((e) => e.usage.toLowerCase().includes("cw"));
+    const cwLines = cwEntries.map((e) => `${e.bandLabel}: ${e.freq} ${e.unit} (${e.usage})`);
+    out.bandplanFull = bandplanLines.length > 0
+      ? `IARU Region 1 Band Plan – all segments:\n${bandplanLines.join("\n")}`
+      : "Band plan not available.";
+    out.bandplanCW = cwLines.length > 0
+      ? `CW Betrieb möglich auf:\n${cwLines.join("\n")}`
+      : out.bandplanFull;
+    if (bp.hf) {
+      const hf20 = bp.hf.find((b) => b.id === "20m");
+      out.bandplan20m = hf20 ? `20m: CW 14000-14070, SSB 14125-14350 (14195 DX, 14300 Emergency)` : "See bandplan.";
+    } else {
+      out.bandplan20m = out.bandplanFull;
+    }
+  } else {
+    out.bandplanFull = out.bandplanCW = out.bandplan20m = "Band plan not available.";
+  }
+
+  // Combined: Good time for DX?
+  const openBands = bands.filter((b) => b.status === "open").map((b) => b.name);
+  out.dxNow = openBands.length > 0
+    ? `Yes. Open bands: ${openBands.join(", ")}. ${out.grayline}`
+    : `Marginal/closed. ${out.propagation} Try grayline: ${out.grayline}`;
+
+  return out;
+}
+
+function buildFullContextDump(fullContext, liveData, readyAnswers) {
+  const lines = [];
+  const fmt = (label, data) => {
+    if (data == null || data === "") return;
+    const s = typeof data === "string" ? data : JSON.stringify(data, null, 1);
+    if (s) lines.push(`### ${label}\n${s}`);
+  };
+
+  // Station
+  const cfg = fullContext.config;
+  if (cfg) lines.push(`### Station\nCallsign: ${cfg.callsign || "—"}. Locator: ${cfg.locator || "—"}. QTH: ${cfg.qthName || "—"}.`);
+
+  // Custom knowledge (antennas.txt or antennas.pdf)
+  const ck = liveData?.customKnowledge;
+  if (ck) lines.push(`### Antennen / Antenna Reference (from your PDF/text)\n${ck}`);
+
+  // Band plan (full – already in readyAnswers)
+  fmt("Band Plan (IARU R1)", readyAnswers.bandplanFull);
+  fmt("CW allocations", readyAnswers.bandplanCW);
+
+  // Refs: phonetics, Q-codes, RST (complete)
+  const refs = liveData?.refs || fullContext.refs;
+  if (refs) {
+    if (Array.isArray(refs.phonetik)) lines.push(`### Phonetic alphabet (ICAO)\n${refs.phonetik.join("; ")}`);
+    if (Array.isArray(refs.qcodes)) lines.push(`### Q-Codes\n${refs.qcodes.join("; ")}`);
+    if (Array.isArray(refs.rst)) {
+      const rstStr = refs.rst.map((r) => `${r.title}: ${r.items.join(", ")}`).join("\n");
+      lines.push(`### RST\n${rstStr}`);
+    }
+  }
+
+  // Propagation
+  const prop = fullContext.propagation;
+  if (prop) {
+    const bandStr = (prop.bands || []).map((b) => `${b.name}: ${b.status}`).join(", ");
+    lines.push(`### Propagation (QTH)\nSFI: ${prop.sfi ?? "—"}, Kp: ${prop.kp ?? "—"}, foF2: ${prop.foF2 ?? "—"} MHz, MUF: ${prop.mufMHz ?? "—"} MHz. Bands: ${bandStr || "—"}.`);
+  }
+
+  // Space weather band conditions
+  const sw = fullContext.spaceWeather;
+  if (sw?.bandConditions) lines.push(`### Band conditions\n${JSON.stringify(sw.bandConditions, null, 1)}`);
+
+  // Contests (all)
+  const contests = fullContext.contests || [];
+  if (contests.length > 0) {
+    const contestStr = contests.map((c) => {
+      const start = c.startTime ? new Date(c.startTime).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "?";
+      return `${c.name} (${c.type || "Mixed"}): ${start}`;
+    }).join("\n");
+    lines.push(`### Contests (next ${contests.length})\n${contestStr}`);
+  }
+
+  // DXpeditions
+  const dxp = fullContext.dxpeditions || [];
+  const activeDxp = dxp.filter((d) => d.status === "active");
+  const upcDxp = dxp.filter((d) => d.status === "upcoming").slice(0, 10);
+  if (activeDxp.length > 0) lines.push(`### Active DXpeditions\n${activeDxp.map((d) => `${d.callsign} – ${d.entity}`).join("; ")}`);
+  if (upcDxp.length > 0) lines.push(`### Upcoming DXpeditions\n${upcDxp.map((d) => `${d.callsign} – ${d.entity} (${d.startDate || "?"})`).join("; ")}`);
+
+  // Beacons (NCDXF)
+  const beacons = liveData?.beacons;
+  if (beacons?.beacons?.length) {
+    const beaconStr = beacons.beacons.slice(0, 18).map((b) => `${b.call} ${b.grid} ${b.location}`).join("; ");
+    lines.push(`### NCDXF Beacons (14.1, 18.11, 21.15, 24.93, 28.2 MHz)\n${beaconStr}`);
+  }
+  const bs = liveData?.beaconStatus;
+  if (bs?.current) lines.push(`### Beacon NOW\n${bs.current.beacon} on ${bs.current.frequency} MHz, ${bs.current.location}. Next change in ${bs.nextChangeInSec ?? "?"} s.`);
+
+  // Recent spots
+  const spots = fullContext.recentSpots || [];
+  if (spots.length > 0) {
+    const spotStr = spots.slice(0, 40).map((s) => `${s.dx} ${s.freq} ${s.mode} (${s.spotter})`).join("; ");
+    lines.push(`### Recent spots (${spots.length})\n${spotStr}`);
+  }
+
+  // Spotted me
+  const sm = liveData?.spottedMe || [];
+  if (sm.length > 0) lines.push(`### Spotted you\n${sm.map((s) => `${s.spotter} ${s.freq} ${s.mode}`).join("; ")}`);
+
+  // Nearest repeaters
+  const nr = fullContext.nearestRepeaters || [];
+  if (nr.length > 0) lines.push(`### Nearest repeaters (km)\n${nr.map((r) => `${r.callsign} ${r.freq} MHz ${r.city} ${r.distKm} km`).join("; ")}`);
+
+  // Satellites
+  const sats = fullContext.satellites || [];
+  if (sats.length > 0) lines.push(`### Satellites\n${sats.map((s) => s.name || s.id).join("; ")}`);
+
+  // PSK reports
+  const psk = fullContext.pskReports || [];
+  if (psk.length > 0) {
+    const pskStr = psk.slice(0, 15).map((p) => `${p.other} ${p.freq} MHz ${p.mode} SNR ${p.snr || "?"}`).join("; ");
+    lines.push(`### PSK Reporter\n${pskStr}`);
+  }
+
+  // Weather
+  const w = fullContext.weather;
+  if (w && typeof w.temp === "number") lines.push(`### Weather\nTemp ${Math.round(w.temp)}°C, humidity ${w.humidity ?? "—"}%, wind ${w.windSpeed ?? "—"} km/h.`);
+
+  // News
+  const news = fullContext.news || [];
+  if (news.length > 0) lines.push(`### News\n${news.slice(0, 10).map((n) => n.title).join(" | ")}`);
+
+  // Alerts
+  const alerts = fullContext.alerts || [];
+  if (alerts.length > 0) lines.push(`### Solar/space alerts\n${alerts.slice(0, 5).map((a) => a.message || JSON.stringify(a)).join(" | ")}`);
+
+  // Sun / grayline
+  fmt("Grayline", readyAnswers.grayline);
+
+  // Static reference (always included)
+  lines.push(`### Reference
+IARU R1 = Europe, Africa, Middle East, N Russia. Modes: CW, SSB (LSB below 10 MHz, USB above), FM, AM, digimodes (FT8 14.074/7.074, JT65, PSK31, RTTY). Emergency: 14.300, 18.160, 21.360, 24.960, 28.825 MHz. DX windows: 20m 14.190-14.195, 40m 7.035-7.040.`);
+
+  return lines.filter(Boolean).join("\n\n");
+}
+
+app.post("/api/chat", async (req, res) => {
+  const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434/v1";
+  const ollamaModel = process.env.OLLAMA_MODEL || "llama3.2";
+  const { messages, context } = req.body || {};
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({ error: "messages_required" });
+    return;
+  }
+
+  let liveData = {};
+  try {
+    liveData = await getChatContextData();
+  } catch (e) {
+    console.warn("Chat context fetch failed:", e?.message || e);
+  }
+
+  const fullContext = {
+    user: context || {},
+    config: liveData.config ? { callsign: liveData.config.callsign, locator: liveData.config.locator, qthName: liveData.config.qthName } : null,
+    spaceWeather: liveData.spaceWeather ? { kp: liveData.spaceWeather.kp, aIndex: liveData.spaceWeather.aIndex, solarFlux: liveData.spaceWeather.solarFlux, alerts: liveData.spaceWeather.alerts, bandConditions: liveData.spaceWeather.bandConditions } : null,
+    sun: liveData.sun ? { today: liveData.sun.today, locator: liveData.sun.locator } : null,
+    propagation: liveData.propagation ? { bands: liveData.propagation.bands, foF2: liveData.propagation.foF2, mufMHz: liveData.propagation.mufMHz, sfi: liveData.propagation.sfi, kp: liveData.propagation.kp } : null,
+    recentSpots: liveData.recentSpots?.map((s) => ({ dx: s.dx, freq: s.freq, mode: s.mode, spotter: s.spotter, time: s.time })) || [],
+    contests: (() => {
+      const list = liveData.contests?.map((c) => ({ name: c.name, startTime: c.startTime, endTime: c.endTime, type: c.type })) || [];
+      return list.sort((a, b) => {
+        const ta = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+        const tb = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+        return ta - tb;
+      });
+    })(),
+    news: liveData.news?.map((n) => ({ title: n.title, pubDate: n.pubDate })) || [],
+    alerts: liveData.alerts || [],
+    dxpeditions: liveData.dxpeditions?.map((d) => ({ callsign: d.callsign, entity: d.entity, startDate: d.startDate, endDate: d.endDate, status: d.status })) || [],
+    weather: liveData.weather ? { temp: liveData.weather.temperature, humidity: liveData.weather.humidity, windSpeed: liveData.weather.windSpeed, weatherCode: liveData.weather.weatherCode } : null,
+    _repeatersRaw: liveData.repeaters?.map((r) => ({ callsign: r.callsign, freq: r.freq, offset: r.offset, city: r.city, band: r.band, lat: r.lat, lon: r.lon })) || [],
+    pskReports: liveData.pskReports?.map((p) => ({ other: p.senderCallsign || p.receiverCallsign, freq: p.frequency, mode: p.mode, snr: p.snr, direction: p.direction })) || [],
+    satellites: liveData.satellites?.map((s) => ({ id: s.id, name: s.name })) || [],
+    beacons: liveData.beacons ? { frequencies: liveData.beacons.frequencies, count: liveData.beacons.beacons?.length } : null,
+    bandplan: liveData.bandplan,
+    refs: liveData.refs
+  };
+
+  // Pre-compute next contest for clarity (contests sorted by startTime)
+  const contestList = fullContext.contests || [];
+  const nextContest = contestList.find((c) => c.startTime && new Date(c.startTime) > new Date()) || contestList[0];
+  fullContext.nextContest = nextContest
+    ? {
+        name: nextContest.name,
+        start: nextContest.startTime,
+        startReadable: nextContest.startTime ? new Date(nextContest.startTime).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : null,
+        type: nextContest.type
+      }
+    : null;
+
+  // Pre-compute nearest repeaters by distance from QTH
+  const qth = liveData.config?.locator ? locatorToLatLon(liveData.config.locator) : null;
+  const repList = fullContext._repeatersRaw || [];
+  if (qth && repList.length > 0) {
+    const withDist = repList
+      .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon))
+      .map((r) => ({ ...r, distKm: Math.round(distanceKm(qth.lat, qth.lon, r.lat, r.lon)) }))
+      .sort((a, b) => a.distKm - b.distKm);
+    fullContext.nearestRepeaters = withDist.slice(0, 15).map((r) => ({ callsign: r.callsign, freq: r.freq, city: r.city, band: r.band, distKm: r.distKm }));
+  } else {
+    fullContext.nearestRepeaters = [];
+  }
+  delete fullContext._repeatersRaw;
+
+  // Pre-compute natural-language answers for common questions (so the model doesn't have to parse JSON)
+  const readyAnswers = buildReadyAnswers(fullContext, liveData);
+  const fullContextDump = buildFullContextDump(fullContext, liveData, readyAnswers);
+
+  const systemPrompt = `You are an expert amateur radio assistant. You have DETAILED CONTEXT below – use it for any question (CW, bandplan, contests, beacons, propagation, spots, repeaters, etc.).
+
+Answer using PRE-COMPUTED ANSWERS when they fit. For other questions, use the DETAILED CONTEXT.
+
+Contest/f nächste? -> nextContest, nextContests
+Relais/Repeater nächste? -> nearestRepeater, nearestRepeatersList
+Ausbreitung/Propagation? -> propagation
+Spots/DX-Aktivität? -> recentSpots
+Wurde ich gespottet? -> spottedMe
+Grayline? -> grayline
+DX jetzt/gut? Soll ich funken? -> dxNow
+DXpeditions? -> activeDxpeditions
+Wetter? -> weather
+Phonetik/Buchstabieren? -> phonetics
+Q-Code? -> qcodes
+RST? -> rst
+Bandplan/SSB 20m? -> bandplan20m
+CW wo möglich? Wo CW? -> bandplanCW
+Bandplan Übersicht? Alle Bänder? -> bandplanFull
+Antenne/Antennen/antenna? -> Antennen section in DETAILED CONTEXT
+
+WEB SEARCH: If you CANNOT answer from readyAnswers (e.g. specific dates, rules, definitions, details), output exactly: [WEB_SEARCH: search query in English]. The system will search the web and give you results. Then you answer using those results. Only use WEB_SEARCH when readyAnswers doesn't have the answer.
+
+RULES: Use readyAnswers when they match. Otherwise use DETAILED CONTEXT. Answer in the user's language. Be concise.
+
+PRE-COMPUTED ANSWERS:
+${JSON.stringify(readyAnswers, null, 2)}
+
+---
+DETAILED CONTEXT (use for any question – bandplan, CW, beacons, contests, spots, propagation, repeaters, satellites, etc.):
+---
+${fullContextDump}`;
+
+  const client = new OpenAI({ baseURL: ollamaUrl, apiKey: "ollama" });
+
+  async function callModel(extraMessages = []) {
+    const     completion = await client.chat.completions.create({
+      model: ollamaModel,
+      messages: [{ role: "system", content: systemPrompt }, ...messages, ...extraMessages],
+      max_tokens: 1200,
+      temperature: 0.5
+    });
+    return completion.choices?.[0]?.message?.content?.trim() ?? "";
+  }
+
+  try {
+    let content = await callModel();
+    const searchMatch = content.match(/\[WEB_SEARCH:\s*([^\]]+)\]/);
+    if (searchMatch) {
+      const query = searchMatch[1].trim();
+      let searchResults = "";
+      try {
+        const ddg = await ddgSearch(query);
+        const hits = (ddg?.results || []).slice(0, 5);
+        searchResults = hits.length > 0
+          ? hits.map((r, i) => `[${i + 1}] ${r.title}\n${r.description || ""}`).join("\n\n")
+          : "No web results found.";
+      } catch (e) {
+        console.warn("Web search failed:", e?.message || e);
+        searchResults = "Web search failed. Please answer from your knowledge.";
+      }
+      const searchContext = { role: "user", content: `[Web search results for "${query}"]:\n${searchResults}\n\nNow answer the user's question using these results.` };
+      content = await callModel([searchContext]);
+    }
+    res.json({ content });
+  } catch (e) {
+    console.warn("Ollama chat error:", e?.message || e);
+    const msg = e?.message || String(e);
+    const status = msg.includes("ECONNREFUSED") || msg.includes("fetch failed") || msg.includes("ENOTFOUND") ? 503 : 500;
+    const friendly = status === 503 ? "Ollama not running. Start: ollama serve (and ollama pull " + ollamaModel + ")" : msg;
+    res.status(status).json({ error: "ai_error", message: friendly });
   }
 });
 

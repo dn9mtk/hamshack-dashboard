@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { formatDateTimeUtc } from "../lib/time.js";
 import PanelLoading from "./PanelLoading.jsx";
 import PanelError from "./PanelError.jsx";
+import InfoTooltip from "./InfoTooltip.jsx";
 
 export default function SpaceWeather() {
   const [data, setData] = useState(null);
@@ -30,12 +31,12 @@ export default function SpaceWeather() {
 
   return (
     <div style={{ display: "grid", gap: 8 }}>
-      <Row label="Kp" value={data.kp ? `${data.kp.kp} (at ${formatDateTimeUtc(data.kp.time)})` : "—"} />
-      <Row label="A" value={data.aIndex ? `${data.aIndex.a} (at ${formatDateTimeUtc(data.aIndex.time)})` : "—"} />
-      <Row label="SFI" value={data.solarFlux ? `${data.solarFlux.sfi} (at ${formatDateTimeUtc(data.solarFlux.time)})` : "—"} />
-      <Row label="X-ray" value={data.xray ? `short ${data.xray.short} (at ${formatDateTimeUtc(data.xray.time)})` : "—"} />
+      <Row label={<InfoTooltip term="Kp"><span>Kp</span></InfoTooltip>} value={data.kp ? `${data.kp.kp} (at ${formatDateTimeUtc(data.kp.time)})` : "—"} />
+      <Row label={<InfoTooltip term="A-index"><span>A</span></InfoTooltip>} value={data.aIndex ? `${data.aIndex.a} (at ${formatDateTimeUtc(data.aIndex.time)})` : "—"} />
+      <Row label={<InfoTooltip term="SFI"><span>SFI</span></InfoTooltip>} value={data.solarFlux ? `${data.solarFlux.sfi} (at ${formatDateTimeUtc(data.solarFlux.time)})` : "—"} />
+      <Row label={<InfoTooltip term="X-ray"><span>X-ray</span></InfoTooltip>} value={data.xray ? `short ${data.xray.short} (at ${formatDateTimeUtc(data.xray.time)})` : "—"} />
       <Row
-        label="Solar wind"
+        label={<InfoTooltip term="solar wind"><span>Solar wind</span></InfoTooltip>}
         value={
           data.solarWind
             ? `${data.solarWind.speed} km/s · ${data.solarWind.density} p/cc · Bz ${data.solarWind.bz} nT (at ${formatDateTimeUtc(data.solarWind.time)})`
@@ -116,7 +117,7 @@ function Row({ label, value }) {
         alignItems: "baseline"
       }}
     >
-      <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, whiteSpace: "nowrap" }}>
+      <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}>
         {label}
       </span>
       <span style={{ fontWeight: 700, fontSize: 13, textAlign: "right", wordBreak: "break-word", minWidth: 0 }}>

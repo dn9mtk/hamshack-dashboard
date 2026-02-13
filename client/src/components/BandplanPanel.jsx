@@ -387,53 +387,53 @@ export default function BandplanPanel() {
       </div>
       <div className="news-panel-content news-panel-slider">
         {item ? (
-        <div className="news-slider-card bandplan-card">
-          <div className="news-slider-link news-slider-link--static bandplan-card-inner">
-            <span className="news-slider-title bandplan-band-title">{item.band}</span>
-            {segment ? (
-              <>
-                <div className="bandplan-segment-card" role="region" aria-label={`Segment ${safeSegmentIndex + 1}`}>
-                  <span className="bandplan-segment-freq">{segment.freq} kHz</span>
-                  <span className="bandplan-segment-bw">max. BW: {segment.bw}</span>
-                  <p className="bandplan-segment-usage">{segment.usage}</p>
-                </div>
-                {hasMultipleSegments && (
-                  <div
-                    className="news-slider-nav bandplan-segment-nav"
-                    role="group"
-                    aria-label="Segment durchblättern"
-                    tabIndex={0}
-                    onKeyDown={handleSegmentKeyDown}
-                  >
-                    <div className="news-slider-nav-row">
-                      <button
-                        type="button"
-                        className="news-slider-btn"
-                        onClick={() => goSegment(-1)}
-                        aria-label="Vorheriges Segment"
-                      >
-                        ‹
-                      </button>
-                      <span className="news-slider-counter" aria-live="polite">
-                        {safeSegmentIndex + 1} / {segmentCount}
-                      </span>
-                      <button
-                        type="button"
-                        className="news-slider-btn"
-                        onClick={() => goSegment(1)}
-                        aria-label="Nächstes Segment"
-                      >
-                        ›
-                      </button>
-                    </div>
+          <>
+            <div className="news-slider-card bandplan-card">
+              <div className="news-slider-link news-slider-link--static bandplan-card-inner">
+                <span className="news-slider-title bandplan-band-title">{item.band}</span>
+                {segment ? (
+                  <div className="bandplan-segment-card" role="region" aria-label={`Segment ${safeSegmentIndex + 1}`}>
+                    <span className="bandplan-segment-freq">{segment.freq} kHz</span>
+                    <span className="bandplan-segment-bw">max. BW: {segment.bw}</span>
+                    <p className="bandplan-segment-usage">{segment.usage}</p>
                   </div>
+                ) : (
+                  <div className="panel-empty">Keine Segmente.</div>
                 )}
-              </>
-            ) : (
-              <div className="panel-empty">Keine Segmente.</div>
+              </div>
+            </div>
+            {segment && hasMultipleSegments && (
+              <div
+                className="news-slider-nav bandplan-segment-nav"
+                role="group"
+                aria-label="Segment durchblättern"
+                tabIndex={0}
+                onKeyDown={handleSegmentKeyDown}
+              >
+                <div className="news-slider-nav-row">
+                  <button
+                    type="button"
+                    className="news-slider-btn"
+                    onClick={() => goSegment(-1)}
+                    aria-label="Vorheriges Segment"
+                  >
+                    &#60;
+                  </button>
+                  <span className="news-slider-counter" aria-live="polite">
+                    {safeSegmentIndex + 1} / {segmentCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="news-slider-btn"
+                    onClick={() => goSegment(1)}
+                    aria-label="Nächstes Segment"
+                  >
+                    &#62;
+                  </button>
+                </div>
+              </div>
             )}
-          </div>
-        </div>
+          </>
         ) : (
           <div className="panel-empty">Kein Eintrag.</div>
         )}
