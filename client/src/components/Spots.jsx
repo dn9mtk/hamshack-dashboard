@@ -111,6 +111,7 @@ export default function Spots() {
             className={`contests-toggle-btn ${!spottedMe ? "active" : ""}`}
             onClick={() => setSpottedMe(false)}
             aria-pressed={!spottedMe}
+            title="All DX Cluster / RBN spots"
           >
             All spots
           </button>
@@ -119,8 +120,9 @@ export default function Spots() {
             className={`contests-toggle-btn ${spottedMe ? "active" : ""}`}
             onClick={() => setSpottedMe(true)}
             aria-pressed={spottedMe}
+            title="Who is spotting my callsign?"
           >
-            Wer spottet mich?
+            Spotted me
           </button>
         </div>
       </div>

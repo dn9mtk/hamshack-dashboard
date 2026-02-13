@@ -1410,6 +1410,29 @@
     outline-offset: 2px;
   }
 
+  .pota-toggle {
+    flex-wrap: wrap;
+  }
+  .pota-toggle .contests-toggle-btn {
+    flex: 0 1 auto;
+    min-width: 2.5em;
+  }
+
+  .xota-program-toggle {
+    flex-wrap: nowrap;
+  }
+  .xota-program-toggle .contests-toggle-btn {
+    flex: 1;
+    min-width: 0;
+  }
+  .xota-band-toggle {
+    flex-wrap: wrap;
+  }
+  .xota-band-toggle .contests-toggle-btn {
+    flex: 0 1 auto;
+    min-width: 2.5em;
+  }
+
   /* Map HF propagation toolbar: layout and controls */
   .hf-prop-bar {
     flex-shrink: 0;

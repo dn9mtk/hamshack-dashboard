@@ -10,7 +10,7 @@ When adding or changing UI (client/src, styles.css), **always follow the existin
 ## Layout
 
 - **Topbar:** Callsign, locator/QTH line, tagline | Settings button, Next contest (if any), Clock (UTC, local, sun times, grayline).
-- **Main:** Sidebar (tabs + one content area) + Map. Sidebar tabs: News, Contests, DXped, Band, Space, Weather, MUF, Spots, PSK, Sat.
+- **Main:** Sidebar (tabs + one content area) + Map. Sidebar tabs: News, Contests, DXped, xOTA, Band, Space, Weather, MUF, Spots, PSK, Sat.
 - **One-page sidebar:** No separate “pages”; one tablist and one scrollable content area. Active tab decides which panel is visible.
 
 ## Panel Pattern
@@ -51,5 +51,6 @@ When adding or changing UI (client/src, styles.css), **always follow the existin
 2. **Centralise styles:** Prefer classes in **styles.css** over inline styles. Reuse **.panel-empty**, **.news-slider-***, **.map-legend-***, etc.
 3. **Callsigns:** Use **CallsignLink** (or link to QRZ) for callsigns so behaviour is consistent.
 4. **English:** All user-facing strings in English.
+5. **xOTA panel:** One panel with program selector (POTA, SOTA, IOTA, COTA) and band filter. One map layer per xOTA type, each with its own toggle in the map toolbar.
 
 When in doubt, mirror an existing panel (e.g. Contests or DXpeditions) for structure and classes, then adapt content.

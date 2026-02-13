@@ -1933,6 +1933,67 @@ app.get("/api/dxpeditions", async (req, res) => {
 });
 
 // --------------------
+// xOTA: POTA, SOTA, IOTA, COTA (WCA) – unified Spothole API
+// Spothole aggregates from pota.app, sotawatch, GMA, etc. – https://spothole.app
+// COTA = Castles on the Air, uses WCA (World Castles Award) in Spothole
+// --------------------
+const SPOTHOLE_BASE = "https://spothole.app/api/v1/spots";
+const XOTA_CACHE_MS = 2 * 60_000;
+
+const XOTA_SIGS = { POTA: "POTA", SOTA: "SOTA", IOTA: "IOTA", WCA: "WCA" }; // WCA = COTA in Spothole
+
+function mapSpotholeToXota(x, sig) {
+  const ref = (x.sig_refs && x.sig_refs[0] ? x.sig_refs[0].id : null) || (x.dx_qth || "").split(/\s+/)[0] || "";
+  const lat = parseFloat(x.dx_latitude ?? (x.sig_refs && x.sig_refs[0] ? x.sig_refs[0].latitude : null));
+  const lon = parseFloat(x.dx_longitude ?? (x.sig_refs && x.sig_refs[0] ? x.sig_refs[0].longitude : null));
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const freqHz = x.freq != null ? Number(x.freq) : null;
+  const freqMhz = Number.isFinite(freqHz) ? freqHz / 1_000_000 : null;
+  const refName = (x.sig_refs && x.sig_refs[0] ? x.sig_refs[0].name : null) || (x.dx_qth || "").trim();
+  return {
+    actId: x.source_id,
+    activator: (x.dx_call || "").trim(),
+    frequency: x.freq,
+    freqMhz,
+    mode: (x.mode || "").trim() || null,
+    reference: ref,
+    refName,
+    spotTime: x.time_iso || null,
+    spotter: (x.de_call || "").trim(),
+    comments: (x.comment || "").trim() || null,
+    latitude: lat,
+    longitude: lon,
+    band: (x.band || "").trim() || null,
+    sig
+  };
+}
+
+app.get("/api/xota", async (req, res) => {
+  const sig = (req.query.sig || "").toUpperCase();
+  if (!XOTA_SIGS[sig]) {
+    return res.status(400).json({ error: "Invalid sig", valid: Object.keys(XOTA_SIGS) });
+  }
+  try {
+    const cacheKey = `xota_${sig}`;
+    const items = await cached(cacheKey, XOTA_CACHE_MS, async () => {
+      const url = `${SPOTHOLE_BASE}?sig=${sig}`;
+      const r = await fetch(url, { headers: { "User-Agent": "HamshackDashboard/1.0" } });
+      if (!r.ok) throw new Error(`Spothole API HTTP ${r.status}`);
+      const raw = await r.json();
+      const list = Array.isArray(raw) ? raw : [];
+      return list
+        .filter((x) => x.sig === sig)
+        .map((x) => mapSpotholeToXota(x, sig))
+        .filter(Boolean);
+    });
+    res.json({ items, sig, updated: new Date().toISOString() });
+  } catch (e) {
+    console.warn(`xOTA ${sig} API error:`, e?.message || e);
+    res.status(500).json({ error: "xota_failed", sig, detail: String(e?.message || e) });
+  }
+});
+
+// --------------------
 // Satellites: CelesTrak amateur group TLE, list + positions (OpenHamClock-style)
 // --------------------
 const AMATEUR_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle";

@@ -7,19 +7,21 @@ import { GLOSSARY, SHORTCUTS } from "../lib/glossary.js";
 const HELP_TABS = [
   { id: "prop", label: "Propagation" },
   { id: "range", label: "Range" },
+  { id: "general", label: "General" },
   { id: "space", label: "Space" },
   { id: "keys", label: "Keys" },
 ];
 
 const PROP_KEYS = ["MUF", "LUF", "FOT", "foF2", "SFI", "Kp", "A-index", "D-RAP", "grayline", "band status"];
 const RANGE_KEYS = ["radio horizon", "terrain horizon", "EIRP", "FSPL", "QTH", "locator"];
+const GENERAL_KEYS = ["xOTA", "POTA", "SOTA", "IOTA", "COTA", "DX", "DX Cluster", "spot", "path forecast", "PSK Reporter", "beacon", "repeater"];
 const SPACE_KEYS = ["X-ray", "solar wind"];
 
 function getItems(tab) {
   if (tab === "keys") {
     return SHORTCUTS.map(({ key: k, desc }) => ({ term: k, full: k, def: desc }));
   }
-  const keys = tab === "prop" ? PROP_KEYS : tab === "range" ? RANGE_KEYS : SPACE_KEYS;
+  const keys = tab === "prop" ? PROP_KEYS : tab === "range" ? RANGE_KEYS : tab === "general" ? GENERAL_KEYS : SPACE_KEYS;
   return keys.map((k) => {
     const e = GLOSSARY[k];
     return e ? { term: e.term, full: e.full, def: e.def } : null;

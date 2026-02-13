@@ -69,14 +69,16 @@ export default function RigDisplay({ freqValue, onFreqChange }) {
             onBlur={commitEdit}
             onKeyDown={handleKeyDown}
             placeholder="———.———"
-            aria-label="Frequenz (MHz)"
+            aria-label="Frequency (MHz)"
+            title="Enter frequency in MHz, e.g. 14.195"
           />
         ) : (
           <button
             type="button"
             className="rig-display-freq rig-display-show"
             onClick={startEdit}
-            aria-label="Frequenz bearbeiten (klicken)"
+            aria-label="Edit frequency (click)"
+            title="Click to edit – your operating frequency for propagation and band lookups"
           >
             {displayStr}
           </button>

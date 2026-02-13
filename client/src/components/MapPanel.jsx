@@ -19,6 +19,19 @@ const MUF_LAYER_KEY = "hamshack_muf_layer";
 const MAP_VIEW_KEY = "hamshack_map_view";
 const SPOTS_LAYER_KEY = "hamshack_spots_layer";
 const DXPEDITIONS_LAYER_KEY = "hamshack_dxpeditions_layer";
+const XOTA_LAYER_KEY = "hamshack_xota_layer";
+const XOTA_TYPE_COLORS = {
+  POTA: "#20c997",
+  SOTA: "#f59f00",
+  IOTA: "#cc5de8",
+  WCA: "#0ea5e9"  // COTA
+};
+const XOTA_SIGS = [
+  { sig: "POTA", label: "POTA", url: "https://pota.app" },
+  { sig: "SOTA", label: "SOTA", url: "https://sotawatch.sota.org.uk" },
+  { sig: "IOTA", label: "IOTA", url: "https://www.iota-world.org" },
+  { sig: "WCA", label: "COTA", url: "https://www.cotapa.org" }
+];
 const BEACONS_LAYER_KEY = "hamshack_beacons_layer";
 const SATELLITES_LAYER_KEY = "hamshack_satellites_layer";
 const REPEATERS_LAYER_KEY = "hamshack_repeaters_layer";
@@ -147,6 +160,21 @@ function loadDxpeditionsLayerPref() {
   }
 }
 
+function loadXotaLayerPref() {
+  try {
+    const v = localStorage.getItem(XOTA_LAYER_KEY);
+    if (v !== null) return v !== "false";
+    // Migrate: if any legacy xOTA layer was on, keep xOTA on
+    const pota = localStorage.getItem("hamshack_pota_layer") !== "false";
+    const sota = localStorage.getItem("hamshack_sota_layer") !== "false";
+    const iota = localStorage.getItem("hamshack_iota_layer") === "true";
+    const cota = localStorage.getItem("hamshack_cota_layer") === "true";
+    return pota || sota || iota || cota;
+  } catch {
+    return true;
+  }
+}
+
 function loadBeaconsLayerPref() {
   try {
     return localStorage.getItem(BEACONS_LAYER_KEY) !== "false";
@@ -266,6 +294,7 @@ export default function MapPanel({
   const gridLayerRef = useRef(null);
   const pskLayerRef = useRef(null);
   const dxpeditionLayerRef = useRef(null);
+  const xotaLayerRef = useRef(null);
   const repeaterLayerRef = useRef(null);
   const mufOverlayRef = useRef(null);
   const bandOverlayRef = useRef(null);
@@ -289,6 +318,7 @@ export default function MapPanel({
   const [mapView, setMapView] = useState(() => loadMapViewPref());
   const [spotsLayerOn, setSpotsLayerOn] = useState(() => loadSpotsLayerPref());
   const [dxpeditionsLayerOn, setDxpeditionsLayerOn] = useState(() => loadDxpeditionsLayerPref());
+  const [xotaLayerOn, setXotaLayerOn] = useState(() => loadXotaLayerPref());
   const [beaconsLayerOn, setBeaconsLayerOn] = useState(() => loadBeaconsLayerPref());
   const [satellitesLayerOn, setSatellitesLayerOn] = useState(() => loadSatellitesLayerPref());
   const [repeatersLayerOn, setRepeatersLayerOn] = useState(() => loadRepeatersLayerPref());
@@ -328,6 +358,12 @@ export default function MapPanel({
       localStorage.setItem(DXPEDITIONS_LAYER_KEY, dxpeditionsLayerOn ? "true" : "false");
     } catch {}
   }, [dxpeditionsLayerOn]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(XOTA_LAYER_KEY, xotaLayerOn ? "true" : "false");
+    } catch {}
+  }, [xotaLayerOn]);
 
   useEffect(() => {
     try {
@@ -399,6 +435,18 @@ export default function MapPanel({
       if (map.hasLayer(layer)) map.removeLayer(layer);
     }
   }, [dxpeditionsLayerOn, mapReady]);
+
+  // Sync xOTA layer visibility with map
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = xotaLayerRef.current;
+    if (!map || !layer) return;
+    if (xotaLayerOn) {
+      if (!map.hasLayer(layer)) map.addLayer(layer);
+    } else {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    }
+  }, [xotaLayerOn, mapReady]);
 
   // Sync beacons layer visibility with map
   useEffect(() => {
@@ -495,6 +543,66 @@ export default function MapPanel({
     }
     return () => { alive = false; };
   }, [dxpeditionsFilter, dxpeditionsLayerOn, mapReady]);
+
+  // xOTA layer: fetch POTA, SOTA, IOTA, WCA in parallel, merge, color by sig
+  useEffect(() => {
+    let alive = true;
+    const layer = xotaLayerRef.current;
+    if (!layer || !mapRef.current) return;
+
+    async function refreshXota() {
+      try {
+        const results = await Promise.all(
+          XOTA_SIGS.map(({ sig }) =>
+            fetch(`/api/xota?sig=${encodeURIComponent(sig)}`)
+              .then((r) => (r.ok ? r.json() : { items: [] }))
+              .then((j) => (j.items || []).map((x) => ({ ...x, sig, label: sig === "WCA" ? "COTA" : sig })))
+          )
+        );
+        if (!alive) return;
+        let list = results.flat().filter(
+          (x) => Number.isFinite(Number(x.latitude)) && Number.isFinite(Number(x.longitude))
+        );
+        // no band filter
+
+        const meta = XOTA_SIGS.reduce((o, { sig, label, url }) => { o[sig] = { label, url }; return o; }, {});
+        layer.clearLayers();
+        list.forEach((x) => {
+          const lat = Number(x.latitude);
+          const lon = Number(x.longitude);
+          const sig = x.sig || "POTA";
+          const color = XOTA_TYPE_COLORS[sig] || "#20c997";
+          const { label, url } = meta[sig] || meta.POTA;
+          const freqStr = x.freqMhz != null ? `${x.freqMhz.toFixed(2)} MHz` : (x.frequency || "—");
+          const refStr = x.refName || x.reference || "—";
+          const popupContent =
+            `<div class="dxped-popup">` +
+            `<div class="dxped-popup-line1">${escapeHtml(x.activator)} · ${escapeHtml(label)}</div>` +
+            `<div class="dxped-popup-entity">${escapeHtml(refStr)}</div>` +
+            `<div class="dxped-popup-dates">${escapeHtml(freqStr)} · ${escapeHtml(x.mode || "—")}</div>` +
+            `<div class="dxped-popup-link"><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)} ↗</a></div>` +
+            `</div>`;
+          const marker = L.circleMarker([lat, lon], {
+            radius: 5,
+            weight: 2,
+            fillOpacity: 0.9,
+            color,
+            fillColor: color
+          }).addTo(layer);
+          marker.bindPopup(popupContent);
+        });
+      } catch (err) {
+        console.warn("xOTA layer:", err);
+      }
+    }
+
+    if (xotaLayerOn) {
+      refreshXota();
+      const id = setInterval(refreshXota, 2 * 60 * 1000);
+      return () => { alive = false; clearInterval(id); };
+    }
+    return () => { alive = false; };
+  }, [xotaLayerOn, mapReady]);
 
   // Repeaters layer: fetch Germany 2m/70cm/10m and draw markers (only those with lat/lon)
   useEffect(() => {
@@ -645,6 +753,12 @@ export default function MapPanel({
     } catch {}
     dxpeditionLayerRef.current = L.layerGroup();
     if (dxpeditionsLayerVisible) map.addLayer(dxpeditionLayerRef.current);
+    let xotaLayerVisible = true;
+    try {
+      xotaLayerVisible = loadXotaLayerPref();
+    } catch {}
+    xotaLayerRef.current = L.layerGroup();
+    if (xotaLayerVisible) map.addLayer(xotaLayerRef.current);
     let satellitesLayerVisible = true;
     try {
       const v = localStorage.getItem(SATELLITES_LAYER_KEY);
@@ -1453,6 +1567,7 @@ export default function MapPanel({
         className="hf-prop-bar"
         role="toolbar"
         aria-label="HF propagation and map perspective"
+        title="HF propagation view options and map layers"
       >
         <span style={{ fontWeight: 700, color: "rgba(255,255,255,0.9)" }}>HF PROPAGATION</span>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1464,6 +1579,7 @@ export default function MapPanel({
                 type="button"
                 onClick={() => setMapView(opt)}
                 aria-label={opt === "LUF" ? "View LUF / D-RAP layer" : `View ${opt}`}
+              title={opt === "none" ? "No overlay" : opt === "MUF" ? "MUF map – red = low, green = high propagation" : opt === "LUF" ? "D-RAP absorption – low = good, high = bad for low bands" : /^\d/.test(opt) ? `Band ${opt} MHz status – open / marginal / closed` : `View ${opt}`}
                 style={{
                   padding: "4px 8px",
                   minWidth: opt === "none" ? 36 : 32,
@@ -1490,6 +1606,7 @@ export default function MapPanel({
               onKeyDown={(e) => e.key === "Enter" && goToGrid(perspectiveGrid)}
               placeholder="e.g. JO40"
               aria-label="Maidenhead grid to center map"
+              title="Enter Maidenhead locator (e.g. JO40) to center map"
               style={{
                 width: 72,
                 padding: "4px 8px",
@@ -1504,6 +1621,7 @@ export default function MapPanel({
               type="button"
               onClick={() => goToGrid(perspectiveGrid)}
               aria-label="Center map on grid"
+              title="Center map on the entered grid square"
               style={{
                 padding: "4px 10px",
                 background: "rgba(77,171,247,0.4)",
@@ -1520,6 +1638,7 @@ export default function MapPanel({
               type="button"
               onClick={findMyGrid}
               aria-label="Center map on my QTH grid"
+              title="Center map on your configured QTH location"
               style={{
                 padding: "4px 10px",
                 background: "rgba(255,255,255,0.08)",
@@ -1536,7 +1655,7 @@ export default function MapPanel({
               type="button"
               onClick={() => setSpotsLayerOn((on) => !on)}
               aria-label={spotsLayerOn ? "Hide DX Cluster / RBN layer" : "Show DX Cluster / RBN layer"}
-              title={spotsLayerOn ? "Calls on – click to hide" : "Calls off – click to show"}
+              title={spotsLayerOn ? "DX Cluster / RBN layer on – click to hide" : "DX Cluster / RBN layer off – click to show"}
               style={{
                 padding: "4px 10px",
                 borderRadius: 6,
@@ -1570,9 +1689,27 @@ export default function MapPanel({
             </button>
             <button
               type="button"
+              onClick={() => setXotaLayerOn((on) => !on)}
+              aria-label={xotaLayerOn ? "Hide xOTA layer" : "Show xOTA layer"}
+              title={xotaLayerOn ? "xOTA (POTA/SOTA/IOTA/COTA) layer on – click to hide" : "xOTA layer off – click to show activators on map"}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 6,
+                border: "1px solid " + (xotaLayerOn ? "rgba(77,171,247,0.8)" : "rgba(255,255,255,0.2)"),
+                background: xotaLayerOn ? "rgba(77,171,247,0.35)" : "rgba(255,255,255,0.08)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: xotaLayerOn ? 700 : 400
+              }}
+            >
+              {xotaLayerOn ? "xOTA ON" : "xOTA OFF"}
+            </button>
+            <button
+              type="button"
               onClick={() => setBeaconsLayerOn((on) => !on)}
               aria-label={beaconsLayerOn ? "Hide beacons" : "Show beacons"}
-              title={beaconsLayerOn ? "Beacons ON – click to hide" : "Beacons OFF – click to show"}
+              title={beaconsLayerOn ? "NCDXF beacons layer on – click to hide" : "NCDXF beacons layer off – click to show"}
               style={{
                 padding: "4px 10px",
                 borderRadius: 6,
@@ -1590,7 +1727,7 @@ export default function MapPanel({
               type="button"
               onClick={() => setSatellitesLayerOn((on) => !on)}
               aria-label={satellitesLayerOn ? "Hide satellites" : "Show satellites"}
-              title={satellitesLayerOn ? "Satellites on – click to hide" : "Satellites off – click to show"}
+              title={satellitesLayerOn ? "ISS and amateur satellites layer on – click to hide" : "Satellites layer off – click to show"}
               style={{
                 padding: "4px 10px",
                 borderRadius: 6,
@@ -1607,8 +1744,8 @@ export default function MapPanel({
             <button
               type="button"
               onClick={() => setRepeatersLayerOn((on) => !on)}
-              aria-label={repeatersLayerOn ? "Repeater-Layer ausblenden" : "Repeater-Layer einblenden"}
-              title={repeatersLayerOn ? "Repeater ON – Klick zum Ausblenden" : "Repeater OFF – Klick zum Einblenden"}
+              aria-label={repeatersLayerOn ? "Hide Repeater layer" : "Show Repeater layer"}
+              title={repeatersLayerOn ? "German repeaters layer on – click to hide" : "Repeaters layer off – click to show"}
               style={{
                 padding: "4px 10px",
                 borderRadius: 6,
@@ -1626,7 +1763,7 @@ export default function MapPanel({
               type="button"
               onClick={() => setHorizonLayerOn((on) => !on)}
               aria-label={horizonLayerOn ? "Hide Range layer" : "Show Range layer"}
-              title={horizonLayerOn ? "Range ON – click to hide" : "Range OFF – click to show"}
+              title={horizonLayerOn ? "Radio horizon and terrain layer on – click to hide" : "Range layer off – click to show circles and terrain polygon"}
               style={{
                 padding: "4px 10px",
                 borderRadius: 6,
@@ -1648,7 +1785,7 @@ export default function MapPanel({
                     type="button"
                     onClick={() => onRepeatersBandChange(key)}
                     aria-label={`Repeater-Band ${label}`}
-                    title={`Nur ${label} Repeater anzeigen`}
+                    title={`Show only ${label} repeaters`}
                     aria-pressed={repeatersBandFilter === key}
                     style={{
                       padding: "4px 8px",
@@ -1671,7 +1808,7 @@ export default function MapPanel({
               type="button"
               onClick={removePathTargetMarker}
               aria-label="Remove DX marker from map"
-              title="Remove DX circle"
+              title="Remove path forecast marker from map"
               style={{
                 padding: "4px 10px",
                 borderRadius: 6,
@@ -1696,8 +1833,9 @@ export default function MapPanel({
           className="map-container"
           style={{ borderRadius: "0 0 14px 14px" }}
           aria-label="Map"
+          title="Click map for path forecast. Layers: Calls, DXped, xOTA, Beacons, Sats, Repeaters, Range."
         >
-      {(spotsLayerOn || dxpeditionsLayerOn || satellitesLayerOn || repeatersLayerOn || horizonLayerOn) && (
+      {(spotsLayerOn || dxpeditionsLayerOn || xotaLayerOn || satellitesLayerOn || repeatersLayerOn || horizonLayerOn) && (
         <>
           <div className="map-legend">
             {spotsLayerOn && (
@@ -1725,6 +1863,25 @@ export default function MapPanel({
                     <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#4dabf7", borderColor: "#4dabf7" }} />
                     <span className="map-legend-label">Upcoming</span>
                   </span>
+                </div>
+              </div>
+            )}
+            {xotaLayerOn && (
+              <div className="map-legend-box" style={{ border: "2px solid rgba(77,171,247,0.5)" }}>
+                <div className="map-legend-title">xOTA Activators</div>
+                <div className="map-legend-row">
+                  {XOTA_SIGS.map(({ sig, label }) => (
+                    <span key={sig} className="map-legend-item">
+                      <span
+                        className="map-legend-dot map-legend-dot--circle"
+                        style={{
+                          background: XOTA_TYPE_COLORS[sig] || "#868e96",
+                          borderColor: XOTA_TYPE_COLORS[sig] || "#868e96"
+                        }}
+                      />
+                      <span className="map-legend-label">{label}</span>
+                    </span>
+                  ))}
                 </div>
               </div>
             )}

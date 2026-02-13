@@ -7,6 +7,7 @@ import Propagation from "./components/Propagation.jsx";
 import Spots from "./components/Spots.jsx";
 import PSKReporter from "./components/PSKReporter.jsx";
 import DXpeditions from "./components/DXpeditions.jsx";
+import XOTAPanel from "./components/xOTAPanel.jsx";
 import Settings from "./components/Settings.jsx";
 import AlertsBar from "./components/AlertsBar.jsx";
 import NewsPanel from "./components/NewsPanel.jsx";
@@ -38,20 +39,21 @@ function loadHorizonHeight() {
 
 const SIDEBAR_TAB_KEY = "hamshack_sidebar_tab";
 const SIDEBAR_TABS = [
-  { id: "news", label: "News" },
-  { id: "contests", label: "Contests" },
-  { id: "dxpeditions", label: "DXped" },
-  { id: "repeaters", label: "Repeater" },
-  { id: "band", label: "Band" },
-  { id: "log", label: "Log" },
-  { id: "ref", label: "Ref" },
-  { id: "range", label: "Range" },
-  { id: "space", label: "Space" },
-  { id: "weather", label: "Weather" },
-  { id: "muf", label: "MUF" },
-  { id: "spots", label: "Spots" },
-  { id: "psk", label: "PSK" },
-  { id: "sat", label: "Sat" }
+  { id: "news", label: "News", title: "Local ham radio news feed" },
+  { id: "contests", label: "Contests", title: "Upcoming and active contests" },
+  { id: "dxpeditions", label: "DXped", title: "DXpeditions – active and upcoming rare DX operations" },
+  { id: "xota", label: "xOTA", title: "POTA, SOTA, IOTA, COTA – activator spots and map layer" },
+  { id: "repeaters", label: "Repeater", title: "German repeaters (2m, 70cm, 10m) with map" },
+  { id: "band", label: "Band", title: "IARU band plan" },
+  { id: "log", label: "Log", title: "Logbook and QSL info" },
+  { id: "ref", label: "Ref", title: "Quick reference / Kurzreferenz" },
+  { id: "range", label: "Range", title: "Radio horizon, terrain horizon, link budget" },
+  { id: "space", label: "Space", title: "Space weather – SFI, Kp, X-ray, solar wind" },
+  { id: "weather", label: "Weather", title: "Local weather (PWS)" },
+  { id: "muf", label: "MUF", title: "MUF and propagation prediction" },
+  { id: "spots", label: "Spots", title: "DX Cluster / RBN spots – who is on the air" },
+  { id: "psk", label: "PSK", title: "PSK Reporter – FT8, FT4 reports" },
+  { id: "sat", label: "Sat", title: "Satellite positions (ISS, amateur sats)" }
 ];
 
 function getInitialTab() {
@@ -66,6 +68,7 @@ export default function App() {
   const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dxpeditionsFilter, setDxpeditionsFilter] = useState("all"); // "all" | "active" | "upcoming"
+  const [xotaProgram, setXotaProgram] = useState("POTA"); // "POTA" | "SOTA" | "IOTA" | "COTA"
   const [repeatersBandFilter, setRepeatersBandFilter] = useState("2m"); // "2m" | "70cm" | "10m"
   const [selectedRepeater, setSelectedRepeater] = useState(null);
   const [focusedRepeater, setFocusedRepeater] = useState(null);
@@ -261,6 +264,7 @@ export default function App() {
                 id={`tab-${t.id}`}
                 className={`sidebar-tab ${sidebarTab === t.id ? "active" : ""}`}
                 onClick={() => setSidebarTabAndPersist(t.id)}
+                title={t.title}
               >
                 {t.label}
               </button>
@@ -283,6 +287,15 @@ export default function App() {
               <div className="panel">
                 <h2>DXpeditions</h2>
                 <DXpeditions filter={dxpeditionsFilter} onFilterChange={setDxpeditionsFilter} />
+              </div>
+            )}
+            {sidebarTab === "xota" && (
+              <div className="panel">
+                <h2>xOTA Activators</h2>
+                <XOTAPanel
+                  program={xotaProgram}
+                  onProgramChange={setXotaProgram}
+                />
               </div>
             )}
             {sidebarTab === "repeaters" && (
