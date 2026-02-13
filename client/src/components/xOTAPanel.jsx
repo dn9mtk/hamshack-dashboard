@@ -1,6 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import PanelError from "./PanelError.jsx";
 import PanelLoading from "./PanelLoading.jsx";
+import { gridCenter } from "../lib/grid.js";
+import { distanceKm, bearing } from "../lib/geo.js";
 
 const XOTA_PROGRAMS = [
   { id: "POTA", label: "POTA", sig: "POTA", url: "https://pota.app" },
@@ -41,7 +43,9 @@ function formatFreq(item) {
 
 export default function XOTAPanel({
   program = "POTA",
-  onProgramChange
+  onProgramChange,
+  onFocusOnMap,
+  locator = ""
 }) {
   const prog = XOTA_PROGRAMS.find((p) => p.id === program) || XOTA_PROGRAMS[0];
   const [items, setItems] = useState([]);
@@ -101,6 +105,20 @@ export default function XOTAPanel({
     [go]
   );
 
+  const qth = useMemo(() => (locator && locator !== "—" ? gridCenter(locator) : null), [locator]);
+  const nearestActivator = useMemo(() => {
+    if (!qth || !items.length) return null;
+    const withCoords = items
+      .filter((x) => Number.isFinite(Number(x.latitude)) && Number.isFinite(Number(x.longitude)))
+      .map((x) => ({
+        ...x,
+        distKm: distanceKm(qth.lat, qth.lon, Number(x.latitude), Number(x.longitude)),
+        bearing: Math.round(bearing(qth.lat, qth.lon, Number(x.latitude), Number(x.longitude)))
+      }))
+      .sort((a, b) => a.distKm - b.distKm);
+    return withCoords[0] || null;
+  }, [qth, items]);
+
   if (err) return <PanelError message={err} onRetry={load} label={prog.label} />;
   if (!loaded && items.length === 0) return <PanelLoading lines={4} />;
   if (items.length === 0) {
@@ -122,6 +140,8 @@ export default function XOTAPanel({
   const hasMultiple = items.length > 1;
 
   const refDisplay = item?.refName ? `${item.reference || ""} ${item.refName}`.trim() : item?.reference || "—";
+
+  const hasCoords = item && Number.isFinite(Number(item.latitude)) && Number.isFinite(Number(item.longitude));
 
   const cardContent = item ? (
     <>
@@ -160,11 +180,35 @@ export default function XOTAPanel({
       >
         {prog.label} ↗
       </a>
+      {onFocusOnMap && hasCoords && (
+        <button
+          type="button"
+          className="news-slider-btn repeaters-focus-btn"
+          style={{ alignSelf: "flex-start" }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onFocusOnMap({ lat: Number(item.latitude), lon: Number(item.longitude), activator: item.activator, reference: item.reference || item.refName });
+          }}
+          title="Center map on this activator"
+        >
+          Find on map
+        </button>
+      )}
     </>
   ) : null;
 
   return (
     <div className="news-panel-content news-panel-slider">
+      {nearestActivator && (
+        <div className="xota-nearest-block" style={{ marginBottom: 8, padding: 8, background: "rgba(32,201,151,0.12)", borderRadius: 8, border: "1px solid rgba(32,201,151,0.3)", fontSize: 12 }}>
+          <div style={{ fontWeight: 600, color: "rgba(255,255,255,0.9)", marginBottom: 4 }}>Nearest activator</div>
+          <div style={{ color: "rgba(255,255,255,0.8)" }}>
+            {nearestActivator.activator} · {nearestActivator.distKm.toFixed(0)} km · {nearestActivator.bearing}°
+            {nearestActivator.refName && ` · ${nearestActivator.refName}`}
+          </div>
+        </div>
+      )}
       <div className="xota-program-toggle contests-toggle" role="group" aria-label="Select xOTA program">
         {XOTA_PROGRAMS.map((p) => (
           <button
@@ -180,14 +224,9 @@ export default function XOTAPanel({
         ))}
       </div>
       <div className="news-slider-card">
-        <a
-            href={prog.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="news-slider-link"
-          >
-            {cardContent}
-          </a>
+        <div className="news-slider-link" style={{ cursor: "default", display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+          {cardContent}
+        </div>
       </div>
       {hasMultiple && (
         <div

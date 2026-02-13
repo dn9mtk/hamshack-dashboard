@@ -377,7 +377,7 @@ export default function BandplanPanel() {
             value={bandFilter}
             onChange={(e) => setBandFilter(e.target.value)}
             aria-label="Band"
-            className="bandplan-band-select"
+            className="ui-select bandplan-band-select"
           >
             {categoryBands.map((b) => (
               <option key={b.id} value={b.id}>{b.band}</option>

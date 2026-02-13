@@ -7,7 +7,7 @@
   "engines": { "node": ">=18.0.0" },
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev": "concurrently \"npm run dev:server\" \"npx wait-on http://localhost:8787/api/config -t 30000 && npm run dev:client\"",
     "dev:server": "cd server && npm start",
     "dev:client": "cd client && npm run dev",
     "install:all": "npm install && cd server && npm install && cd ../client && npm install",

@@ -14,6 +14,8 @@ import NewsPanel from "./components/NewsPanel.jsx";
 import SatellitesPanel from "./components/SatellitesPanel.jsx";
 import ContestsPanel from "./components/ContestsPanel.jsx";
 import RepeatersPanel from "./components/RepeatersPanel.jsx";
+import APRSPanel from "./components/APRSPanel.jsx";
+import LocalNetsPanel from "./components/LocalNetsPanel.jsx";
 import BandplanPanel from "./components/BandplanPanel.jsx";
 import LogbookPanel from "./components/LogbookPanel.jsx";
 import RigDisplay from "./components/RigDisplay.jsx";
@@ -44,6 +46,8 @@ const SIDEBAR_TABS = [
   { id: "dxpeditions", label: "DXped", title: "DXpeditions – active and upcoming rare DX operations" },
   { id: "xota", label: "xOTA", title: "POTA, SOTA, IOTA, COTA – activator spots and map layer" },
   { id: "repeaters", label: "Repeater", title: "German repeaters (2m, 70cm, 10m) with map" },
+  { id: "aprs", label: "APRS", title: "APRS stations on map (track callsigns via aprs.fi)" },
+  { id: "nets", label: "Nets", title: "Local nets schedule" },
   { id: "band", label: "Band", title: "IARU band plan" },
   { id: "log", label: "Log", title: "Logbook and QSL info" },
   { id: "ref", label: "Ref", title: "Quick reference / Kurzreferenz" },
@@ -69,6 +73,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dxpeditionsFilter, setDxpeditionsFilter] = useState("all"); // "all" | "active" | "upcoming"
   const [xotaProgram, setXotaProgram] = useState("POTA"); // "POTA" | "SOTA" | "IOTA" | "COTA"
+  const [focusedXotaItem, setFocusedXotaItem] = useState(null); // { lat, lon, activator?, reference? }
   const [repeatersBandFilter, setRepeatersBandFilter] = useState("2m"); // "2m" | "70cm" | "10m"
   const [selectedRepeater, setSelectedRepeater] = useState(null);
   const [focusedRepeater, setFocusedRepeater] = useState(null);
@@ -101,7 +106,8 @@ export default function App() {
         pwsStationId: data.pwsStationId ?? "",
         lat: data.lat,
         lon: data.lon,
-        elevation: data.elevation
+        elevation: data.elevation,
+        wantedPrefixes: data.wantedPrefixes ?? ""
       }))
       .catch(() => {});
   }
@@ -295,6 +301,8 @@ export default function App() {
                 <XOTAPanel
                   program={xotaProgram}
                   onProgramChange={setXotaProgram}
+                  onFocusOnMap={setFocusedXotaItem}
+                  locator={config.locator}
                 />
               </div>
             )}
@@ -314,6 +322,13 @@ export default function App() {
                 />
               </div>
             )}
+            {sidebarTab === "aprs" && (
+              <div className="panel">
+                <h2>APRS</h2>
+                <APRSPanel callsign={config.callsign} />
+              </div>
+            )}
+            {sidebarTab === "nets" && <LocalNetsPanel />}
             {sidebarTab === "band" && (
               <div className="panel">
                 <h2>IARU Band Plan</h2>
@@ -363,7 +378,7 @@ export default function App() {
             {sidebarTab === "spots" && (
               <div className="panel">
                 <h2>Spots</h2>
-                <Spots />
+                <Spots wantedPrefixes={config.wantedPrefixes} />
               </div>
             )}
             {sidebarTab === "psk" && (
@@ -383,6 +398,7 @@ export default function App() {
         <section className="map">
           <MapPanel
             dxpeditionsFilter={dxpeditionsFilter}
+            focusedXotaItem={focusedXotaItem}
             repeatersBandFilter={repeatersBandFilter}
             onRepeatersBandChange={setRepeatersBandFilter}
             focusedRepeater={focusedRepeater}

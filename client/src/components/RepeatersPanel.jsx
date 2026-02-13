@@ -3,6 +3,33 @@ import PanelError from "./PanelError.jsx";
 import PanelLoading from "./PanelLoading.jsx";
 
 const REPEATERBOOK_URL = "https://www.repeaterbook.com/";
+const COVERAGE_POWER_KEY = "hamshack_repeater_power";
+const COVERAGE_GAIN_KEY = "hamshack_repeater_gain";
+const COVERAGE_MAST_KEY = "hamshack_repeater_mast";
+
+function loadCoveragePower() {
+  try {
+    const v = parseFloat(localStorage.getItem(COVERAGE_POWER_KEY));
+    return Number.isFinite(v) && v > 0 ? v : 5;
+  } catch { return 5; }
+}
+function loadCoverageGain() {
+  try {
+    const v = parseFloat(localStorage.getItem(COVERAGE_GAIN_KEY));
+    return Number.isFinite(v) && v >= 0 ? v : 5;
+  } catch { return 5; }
+}
+function loadCoverageMast() {
+  try {
+    const v = parseFloat(localStorage.getItem(COVERAGE_MAST_KEY));
+    return Number.isFinite(v) && v >= 0 ? v : 20;
+  } catch { return 20; }
+}
+
+function horizonKm(h1, h2) {
+  if (!Number.isFinite(h1) || !Number.isFinite(h2) || h1 < 0 || h2 < 0) return null;
+  return 4.12 * (Math.sqrt(h1) + Math.sqrt(h2));
+}
 
 export const REPEATER_BAND_2M = "2m";
 export const REPEATER_BAND_70CM = "70cm";
@@ -36,6 +63,16 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
   const [bandLocal, setBandLocal] = useState(REPEATER_BAND_2M);
   const [query, setQuery] = useState("");
   const [reachability, setReachability] = useState(null);
+  const [pathData, setPathData] = useState(null);
+  const [powerW, setPowerW] = useState(loadCoveragePower);
+  const [gainDbi, setGainDbi] = useState(loadCoverageGain);
+  const [mastM, setMastM] = useState(loadCoverageMast);
+  const [h1, setH1] = useState(() => {
+    try {
+      const v = parseFloat(localStorage.getItem("hamshack_horizon_height"));
+      return Number.isFinite(v) && v >= 0 ? v : 11;
+    } catch { return 11; }
+  });
   const band = bandProp ?? bandLocal;
   const setBand = onBandChange ?? setBandLocal;
 
@@ -127,29 +164,50 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
   }, [band, filteredItems.length]);
 
   const currentRepeater = filteredItems[index];
+  const repFreq = currentRepeater?.freq != null ? Number(currentRepeater.freq) : null;
+  const repOffset = currentRepeater?.offset != null ? Number(currentRepeater.offset) : 0;
+  const inputFreq = repFreq != null && Number.isFinite(repFreq) ? repFreq - repOffset : null;
+
   useEffect(() => {
     const lat = currentRepeater?.lat != null ? Number(currentRepeater.lat) : NaN;
     const lon = currentRepeater?.lon != null ? Number(currentRepeater.lon) : NaN;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
       setReachability(null);
+      setPathData(null);
       return;
     }
     let cancelled = false;
-    fetch(`/api/propagation/path?toLat=${lat}&toLon=${lon}`)
+    const params = new URLSearchParams({ toLat: lat, toLon: lon, powerW });
+    if (Number.isFinite(inputFreq) && inputFreq > 0) params.set("freq", inputFreq);
+    fetch(`/api/propagation/path?${params}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
       .then((data) => {
-        if (!cancelled)
+        if (!cancelled) {
           setReachability({
             lineOfSightClear: data.lineOfSightClear,
             obstructedAtKm: data.obstructedAtKm,
-            distanceKm: data.distanceKm
+            distanceKm: data.distanceKm,
+            bearing: data.bearing
           });
+          setPathData(data);
+        }
       })
       .catch(() => {
-        if (!cancelled) setReachability(null);
+        if (!cancelled) {
+          setReachability(null);
+          setPathData(null);
+        }
       });
     return () => { cancelled = true; };
-  }, [currentRepeater?.lat, currentRepeater?.lon]);
+  }, [currentRepeater?.lat, currentRepeater?.lon, inputFreq, powerW]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COVERAGE_POWER_KEY, String(powerW));
+      localStorage.setItem(COVERAGE_GAIN_KEY, String(gainDbi));
+      localStorage.setItem(COVERAGE_MAST_KEY, String(mastM));
+    } catch {}
+  }, [powerW, gainDbi, mastM]);
 
   const handleKeyDown = useCallback(
     (e) => {
@@ -210,6 +268,106 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
             <span>Obstructed{reachability.obstructedAtKm != null ? ` ~${reachability.obstructedAtKm} km` : ""}</span>
           )}
           {reachability.distanceKm != null && ` · ${reachability.distanceKm} km`}
+          {typeof reachability.bearing === "number" && ` · ${reachability.bearing}°`}
+        </div>
+      )}
+      {pathData && r && Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)) && (
+        <div className="repeaters-coverage-block" style={{ marginTop: 10, padding: 10, background: "rgba(77,171,247,0.08)", borderRadius: 8 }}>
+          <h4 style={{ fontSize: 12, fontWeight: 600, margin: "0 0 8px 0", color: "rgba(255,255,255,0.9)" }}>Coverage (QTH → Repeater)</h4>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
+            <div>
+              <label htmlFor="rep-cov-pwr" style={{ fontSize: 10, color: "rgba(255,255,255,0.6)" }}>Power (W)</label>
+              <input id="rep-cov-pwr" type="number" min="0.1" step="0.5" value={powerW} onChange={(e) => setPowerW(parseFloat(e.target.value) || 0)} style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(0,0,0,0.2)", color: "#fff", fontSize: 12 }} />
+            </div>
+            <div>
+              <label htmlFor="rep-cov-gain" style={{ fontSize: 10, color: "rgba(255,255,255,0.6)" }}>Gain (dBi)</label>
+              <input id="rep-cov-gain" type="number" min="0" step="0.5" value={gainDbi} onChange={(e) => setGainDbi(parseFloat(e.target.value) || 0)} style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(0,0,0,0.2)", color: "#fff", fontSize: 12 }} />
+            </div>
+            <div>
+              <label htmlFor="rep-cov-mast" style={{ fontSize: 10, color: "rgba(255,255,255,0.6)" }}>Mast (m)</label>
+              <input id="rep-cov-mast" type="number" min="0" step="1" value={mastM} onChange={(e) => setMastM(parseFloat(e.target.value) || 0)} style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(0,0,0,0.2)", color: "#fff", fontSize: 12 }} />
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+            {pathData.linkBudget && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span className="repeaters-coverage-dot" style={{ background: (() => {
+                    const pl = pathData.linkBudget.pathLossDb;
+                    if (pl == null) return "rgba(255,255,255,0.3)";
+                    const eirp = 10 * Math.log10(powerW * 1000) + gainDbi;
+                    const pr = eirp - pl;
+                    const sens = -120;
+                    if (pathData.linkBudget?.linkEstimate === "out_of_range") return "#ff6b6b";
+                    if (pr >= sens + 10) return "#51cf66";
+                    if (pr >= sens + 3) return "#ffd43b";
+                    return "#ff922b";
+                  })() }} />
+                  Signal at repeater
+                </span>
+                <strong style={{ color: (() => {
+                  const pl = pathData.linkBudget.pathLossDb;
+                  if (pl == null) return "inherit";
+                  const eirp = 10 * Math.log10(powerW * 1000) + gainDbi;
+                  const pr = eirp - pl;
+                  const sens = -120;
+                  if (pathData.linkBudget?.linkEstimate === "out_of_range") return "#ff6b6b";
+                  if (pr >= sens + 10) return "#51cf66";
+                  if (pr >= sens + 3) return "#ffd43b";
+                  return "#ff922b";
+                })() }}>
+                  {(() => {
+                    const pl = pathData.linkBudget.pathLossDb;
+                    if (pl == null) return "—";
+                    const eirp = 10 * Math.log10(powerW * 1000) + gainDbi;
+                    const pr = eirp - pl;
+                    const sens = -120;
+                    let lab = "Weak";
+                    if (pathData.linkBudget?.linkEstimate === "out_of_range") lab = "Out of range";
+                    else if (pr >= sens + 10) lab = "OK";
+                    else if (pr >= sens + 3) lab = "Marginal";
+                    return `${pr.toFixed(0)} dBm (${lab})`;
+                  })()}
+                </strong>
+              </div>
+            )}
+            {pathData.linkBudget?.pathLossDb != null && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span className="repeaters-coverage-dot" style={{ background: (() => {
+                    const pl = pathData.linkBudget.pathLossDb;
+                    if (pl < 100) return "#51cf66";
+                    if (pl < 115) return "#ffd43b";
+                    return "#ff922b";
+                  })() }} />
+                  Path loss
+                </span>
+                <strong style={{ color: (() => {
+                  const pl = pathData.linkBudget.pathLossDb;
+                  if (pl < 100) return "#51cf66";
+                  if (pl < 115) return "#ffd43b";
+                  return "#ff922b";
+                })() }}>{pathData.linkBudget.pathLossDb} dB</strong>
+              </div>
+            )}
+            {horizonKm(h1, mastM) != null && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span className="repeaters-coverage-dot" style={{ background: pathData.distanceKm > horizonKm(h1, mastM) ? "#ff922b" : "#51cf66" }} />
+                  Radio horizon
+                </span>
+                <strong style={{ color: pathData.distanceKm > horizonKm(h1, mastM) ? "#ff922b" : "#51cf66" }}>
+                  {horizonKm(h1, mastM).toFixed(1)} km{pathData.distanceKm > horizonKm(h1, mastM) ? " (path beyond)" : ""}
+                </strong>
+              </div>
+            )}
+          </div>
+          <p className="repeaters-coverage-legend" style={{ margin: "8px 0 0 0", fontSize: 10, color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", gap: "6px 12px", alignItems: "center" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span className="repeaters-coverage-dot" style={{ background: "#51cf66" }} />good</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span className="repeaters-coverage-dot" style={{ background: "#ffd43b" }} />marginal</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span className="repeaters-coverage-dot" style={{ background: "#ff922b" }} />weak</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span className="repeaters-coverage-dot" style={{ background: "#ff6b6b" }} />poor</span>
+          </p>
         </div>
       )}
       <span className="news-slider-hint" style={{ marginTop: 6 }}>Repeater Deutschland · Karte: Repeater-Layer einschalten</span>

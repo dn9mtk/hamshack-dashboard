@@ -878,7 +878,10 @@
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
-  .spots-filter select {
+  /* Shared select/dropdown – UI concept: dark panel, subtle border, accent focus */
+  .ui-select,
+  .spots-filter select,
+  .bandplan-band-select {
     font-size: 12px;
     padding: 5px 8px;
     min-width: 0;
@@ -888,13 +891,32 @@
     color: var(--text);
     outline: none;
     cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='rgba(255,255,255,0.5)' stroke-width='2'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 28px;
   }
-  .spots-filter select:hover {
+  .ui-select:hover,
+  .spots-filter select:hover,
+  .bandplan-band-select:hover {
     border-color: rgba(255,255,255,0.25);
   }
-  .spots-filter select:focus {
+  .ui-select:focus,
+  .ui-select:focus-visible,
+  .spots-filter select:focus,
+  .spots-filter select:focus-visible,
+  .bandplan-band-select:focus,
+  .bandplan-band-select:focus-visible {
     border-color: rgba(77,171,247,0.5);
     box-shadow: 0 0 0 2px rgba(77,171,247,0.2);
+  }
+  .ui-select option,
+  .spots-filter select option,
+  .bandplan-band-select option {
+    background: var(--bg);
+    color: var(--text);
   }
   .repeaters-search-input {
     font-size: 12px;
@@ -908,6 +930,16 @@
   }
   .repeaters-search-input::placeholder {
     color: rgba(255,255,255,0.6);
+  }
+  .repeaters-coverage-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .repeaters-coverage-block input:focus-visible {
+    outline: 2px solid rgba(77,171,247,0.6);
+    outline-offset: 2px;
   }
   .repeaters-search-input:focus-visible {
     outline: 2px solid rgba(77,171,247,0.8);
@@ -929,18 +961,6 @@
   }
   .bandplan-band-select {
     min-width: 160px;
-    padding: 5px 8px;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid rgba(255,255,255,0.15);
-  }
-  .bandplan-band-select option {
-    background: var(--bg);
-    color: var(--text);
-  }
-  .bandplan-band-select:focus {
-    border-color: rgba(77,171,247,0.5);
-    outline: none;
   }
   /* Logbook: link list */
   .logbook-links {
@@ -1556,6 +1576,13 @@
     font-family: system-ui, sans-serif;
     font-size: 13px;
     color: rgba(255,255,255,0.92);
+  }
+  .path-forecast-popup-coords {
+    font-size: 11px;
+    color: rgba(255,255,255,0.6);
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
   }
   .path-forecast-popup-title {
     font-weight: 800;

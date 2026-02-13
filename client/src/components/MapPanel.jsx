@@ -4,6 +4,7 @@ import { terminatorSegments, nightPolygons } from "../lib/terminator.js";
 import { GLOSSARY } from "../lib/glossary.js";
 import { buildSpotQuery } from "../lib/spotsQuery.js";
 import { gridCenter } from "../lib/grid.js";
+import { latLonToLocator, latLonToDms } from "../lib/geo.js";
 import { formatDateRange } from "../lib/time.js";
 
 // Fix Leaflet default icon issue
@@ -35,6 +36,7 @@ const XOTA_SIGS = [
 const BEACONS_LAYER_KEY = "hamshack_beacons_layer";
 const SATELLITES_LAYER_KEY = "hamshack_satellites_layer";
 const REPEATERS_LAYER_KEY = "hamshack_repeaters_layer";
+const APRS_LAYER_KEY = "hamshack_aprs_layer";
 const HORIZON_LAYER_KEY = "hamshack_horizon_layer";
 const HORIZON_COLORS = {
   ground: { color: "rgba(230,119,0,0.9)", fill: "rgba(230,119,0,0.2)" },
@@ -133,14 +135,26 @@ function escapeHtml(str) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+function formatAprsLastTime(ts) {
+  const t = Number(ts);
+  if (!Number.isFinite(t)) return "";
+  const d = new Date(t * 1000);
+  const now = Date.now();
+  const diffMs = now - d.getTime();
+  if (diffMs < 60000) return "just now";
+  if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)} min ago`;
+  if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)} h ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 function loadSavedFilters() {
   try {
     const raw = localStorage.getItem(FILTER_KEY);
-    if (!raw) return { band: "ALL", mode: "ALL" };
+    if (!raw) return { band: "ALL", mode: "ALL", reachable: false };
     const j = JSON.parse(raw);
-    return { band: j.band || "ALL", mode: j.mode || "ALL" };
+    return { band: j.band || "ALL", mode: j.mode || "ALL", reachable: !!j.reachable };
   } catch {
-    return { band: "ALL", mode: "ALL" };
+    return { band: "ALL", mode: "ALL", reachable: false };
   }
 }
 
@@ -203,6 +217,23 @@ function loadRepeatersLayerPref() {
   }
 }
 
+function loadAprsLayerPref() {
+  try {
+    return localStorage.getItem(APRS_LAYER_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function loadAprsCallsigns() {
+  try {
+    const raw = localStorage.getItem("hamshack_aprs_callsigns") || "";
+    return raw.split(/[\s,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 20);
+  } catch {
+    return [];
+  }
+}
+
 function loadHorizonLayerPref() {
   try {
     return localStorage.getItem(HORIZON_LAYER_KEY) === "true";
@@ -211,7 +242,12 @@ function loadHorizonLayerPref() {
   }
 }
 
-function pathForecastPopupHtml(data) {
+function pathForecastPopupHtml(data, clickLat, clickLon) {
+  const lat = clickLat ?? data.to?.lat;
+  const lon = clickLon ?? data.to?.lon;
+  const loc = lat != null && lon != null ? latLonToLocator(lat, lon) : null;
+  const dms = lat != null && lon != null ? latLonToDms(lat, lon) : null;
+  const coordsHtml = loc && dms ? `<div class="path-forecast-popup-coords">${escapeHtml(loc)} · ${escapeHtml(dms)}</div>` : "";
   const toStr = data.to?.grid || (data.to?.lat != null && data.to?.lon != null
     ? `${Number(data.to.lat).toFixed(1)}°, ${Number(data.to.lon).toFixed(1)}°`
     : "—");
@@ -249,6 +285,7 @@ function pathForecastPopupHtml(data) {
 
   return `
     <div class="path-forecast-popup">
+      ${coordsHtml}
       <div class="path-forecast-popup-title">Path Forecast</div>
       <div class="path-forecast-popup-route">${escapeHtml(data.from?.locator || "—")} → ${escapeHtml(String(toStr))}</div>
       <div class="path-forecast-popup-meta">${escapeHtml(String(data.distanceKm ?? "—"))} km · MUF ${escapeHtml(String(data.mufPath ?? "—"))} MHz</div>
@@ -274,6 +311,7 @@ const REPEATER_DEFAULT_COLOR = "#868e96";
 
 export default function MapPanel({
   dxpeditionsFilter = "all",
+  focusedXotaItem,
   repeatersBandFilter = "2m",
   onRepeatersBandChange,
   onSelectRepeater,
@@ -296,6 +334,7 @@ export default function MapPanel({
   const dxpeditionLayerRef = useRef(null);
   const xotaLayerRef = useRef(null);
   const repeaterLayerRef = useRef(null);
+  const aprsLayerRef = useRef(null);
   const mufOverlayRef = useRef(null);
   const bandOverlayRef = useRef(null);
   const lufOverlayRef = useRef(null);
@@ -322,6 +361,8 @@ export default function MapPanel({
   const [beaconsLayerOn, setBeaconsLayerOn] = useState(() => loadBeaconsLayerPref());
   const [satellitesLayerOn, setSatellitesLayerOn] = useState(() => loadSatellitesLayerPref());
   const [repeatersLayerOn, setRepeatersLayerOn] = useState(() => loadRepeatersLayerPref());
+  const [aprsLayerOn, setAprsLayerOn] = useState(() => loadAprsLayerPref());
+  const [aprsCallsignsVersion, setAprsCallsignsVersion] = useState(0);
   const [horizonLayerOn, setHorizonLayerOn] = useState(() => loadHorizonLayerPref());
   const [spaceSummary, setSpaceSummary] = useState(null);
   const [perspectiveGrid, setPerspectiveGrid] = useState("");
@@ -406,6 +447,24 @@ export default function MapPanel({
 
   useEffect(() => {
     try {
+      localStorage.setItem(APRS_LAYER_KEY, aprsLayerOn ? "true" : "false");
+    } catch {}
+  }, [aprsLayerOn]);
+
+  useEffect(() => {
+    const handler = () => setAprsLayerOn(true);
+    window.addEventListener("aprsShowOnMap", handler);
+    return () => window.removeEventListener("aprsShowOnMap", handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setAprsCallsignsVersion((v) => v + 1);
+    window.addEventListener("aprsCallsignsChanged", handler);
+    return () => window.removeEventListener("aprsCallsignsChanged", handler);
+  }, []);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(HORIZON_LAYER_KEY, horizonLayerOn ? "true" : "false");
     } catch {}
   }, [horizonLayerOn]);
@@ -483,6 +542,18 @@ export default function MapPanel({
       if (map.hasLayer(layer)) map.removeLayer(layer);
     }
   }, [repeatersLayerOn, mapReady]);
+
+  // Sync APRS layer visibility with map
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = aprsLayerRef.current;
+    if (!map || !layer) return;
+    if (aprsLayerOn) {
+      if (!map.hasLayer(layer)) map.addLayer(layer);
+    } else {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    }
+  }, [aprsLayerOn, mapReady]);
 
   // DXpeditions layer: fetch and draw markers by filter (all / active / upcoming)
   useEffect(() => {
@@ -589,7 +660,7 @@ export default function MapPanel({
             color,
             fillColor: color
           }).addTo(layer);
-          marker.bindPopup(popupContent);
+          marker.bindPopup(popupContent, { autoPan: false });
         });
       } catch (err) {
         console.warn("xOTA layer:", err);
@@ -666,6 +737,70 @@ export default function MapPanel({
     return () => { alive = false; };
   }, [repeatersLayerOn, repeatersBandFilter, mapReady]);
 
+  // APRS layer: fetch tracked callsigns from aprs.fi and draw markers
+  useEffect(() => {
+    let alive = true;
+    const layer = aprsLayerRef.current;
+    if (!layer || !mapRef.current) return;
+
+    async function refreshAprs() {
+      const callsigns = loadAprsCallsigns();
+      if (callsigns.length === 0) {
+        layer.clearLayers();
+        return;
+      }
+      try {
+        const r = await fetch(`/api/aprs?callsigns=${encodeURIComponent(callsigns.join(","))}`);
+        if (!alive) return;
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (j.error === "aprs_not_configured") return;
+          throw new Error(j.detail || `HTTP ${r.status}`);
+        }
+        const data = await r.json();
+        const list = (data.entries || []).filter(
+          (x) => Number.isFinite(Number(x.lat)) && Number.isFinite(Number(x.lng))
+        );
+        layer.clearLayers();
+        const APRS_COLOR = "#20c997";
+        list.forEach((x) => {
+          const lat = Number(x.lat);
+          const lon = Number(x.lng);
+          const marker = L.circleMarker([lat, lon], {
+            radius: 8,
+            weight: 2,
+            fillOpacity: 0.9,
+            color: APRS_COLOR,
+            fillColor: APRS_COLOR
+          }).addTo(layer);
+          const comment = (x.comment || "").substring(0, 80);
+          const lastTime = x.lasttime != null ? formatAprsLastTime(x.lasttime) : "";
+          const aprsFiUrl = `https://aprs.fi/info/a/${encodeURIComponent((x.name || "").replace(/-.*$/, ""))}`;
+          const popupContent =
+            `<div class="dxped-popup">` +
+            `<div class="dxped-popup-line1">${escapeHtml(x.name || "—")}</div>` +
+            (comment ? `<div class="dxped-popup-dates">${escapeHtml(comment)}</div>` : "") +
+            (lastTime ? `<div class="dxped-popup-dates">Last seen: ${escapeHtml(lastTime)}</div>` : "") +
+            `<div class="dxped-popup-link"><a href="${aprsFiUrl}" target="_blank" rel="noopener noreferrer">aprs.fi ↗</a></div>` +
+            `</div>`;
+          marker.bindPopup(popupContent, { autoPan: false });
+        });
+      } catch (err) {
+        if (alive) console.warn("APRS layer:", err);
+      }
+    }
+
+    if (aprsLayerOn) {
+      refreshAprs();
+      const id = setInterval(refreshAprs, 2 * 60 * 1000); // 2 min
+      return () => {
+        alive = false;
+        clearInterval(id);
+      };
+    }
+    return () => { alive = false; };
+  }, [aprsLayerOn, aprsCallsignsVersion, mapReady]);
+
   // Center and highlight a focused repeater (from sidebar focus button)
   useEffect(() => {
     if (!focusedRepeater || !mapRef.current) return;
@@ -711,6 +846,44 @@ export default function MapPanel({
       }
     });
   }, [focusedRepeater, repeatersLayerOn, mapReady]);
+
+  // Center map on focused xOTA activator (from "Find on map" button)
+  useEffect(() => {
+    if (!focusedXotaItem || !mapRef.current) return;
+    const latNum = Number(focusedXotaItem.lat);
+    const lonNum = Number(focusedXotaItem.lon);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return;
+
+    const map = mapRef.current;
+    const target = L.latLng(latNum, lonNum);
+    const zoom = Math.max(map.getZoom(), 10);
+
+    const reCenter = () => map.setView(target, zoom, { animate: false });
+
+    const highlightMarker = () => {
+      const layer = xotaLayerRef.current;
+      if (!layer || typeof layer.eachLayer !== "function") return;
+      layer.eachLayer((marker) => {
+        if (!marker || !marker.getLatLng || !marker.setStyle) return;
+        const p = marker.getLatLng();
+        const isMatch = Math.abs(p.lat - latNum) < 0.0001 && Math.abs(p.lng - lonNum) < 0.0001;
+        if (isMatch) {
+          marker.setStyle({ radius: 12, weight: 4, fillOpacity: 1 });
+          if (marker.openPopup) marker.openPopup();
+          if (marker.bringToFront) marker.bringToFront();
+        } else {
+          marker.setStyle({ radius: 5, weight: 2 });
+        }
+      });
+      // Fallback: Popup autoPan can shift map – re-center so point stays mittig
+      setTimeout(reCenter, 100);
+    };
+
+    map.setView(target, zoom, { animate: true });
+    const t0 = setTimeout(highlightMarker, 100);
+    const t1 = setTimeout(highlightMarker, 2000);
+    return () => { clearTimeout(t0); clearTimeout(t1); };
+  }, [focusedXotaItem, xotaLayerOn, mapReady]);
 
   useEffect(() => {
     if (mapRef.current) return;
@@ -782,6 +955,12 @@ export default function MapPanel({
     } catch {}
     repeaterLayerRef.current = L.layerGroup();
     if (repeatersLayerVisible) map.addLayer(repeaterLayerRef.current);
+    let aprsLayerVisible = false;
+    try {
+      aprsLayerVisible = localStorage.getItem(APRS_LAYER_KEY) === "true";
+    } catch {}
+    aprsLayerRef.current = L.layerGroup();
+    if (aprsLayerVisible) map.addLayer(aprsLayerRef.current);
     gridLayerRef.current = L.layerGroup().addTo(map);
     pskLayerRef.current = L.layerGroup().addTo(map);
 
@@ -839,10 +1018,13 @@ export default function MapPanel({
     }).addTo(map);
     greyRef.current = grey;
 
-    // Map click → Path forecast (QTH → clicked point): marker "DX" + popup with forecast
+    // Map click → Path forecast (QTH → clicked point): marker "DX" + popup with coords + forecast
     map.on("click", (e) => {
       const lat = e.latlng.lat;
       const lon = e.latlng.lng;
+      const loc = latLonToLocator(lat, lon);
+      const dms = latLonToDms(lat, lon);
+      const coordsHtml = `<div class="path-forecast-popup-coords">${escapeHtml(loc || "—")} · ${escapeHtml(dms || "—")}</div>`;
       if (pathTargetMarkerRef.current) map.removeLayer(pathTargetMarkerRef.current);
       const marker = L.marker([lat, lon], {
         icon: L.divIcon({
@@ -854,7 +1036,7 @@ export default function MapPanel({
         })
       }).addTo(map);
       marker.bindPopup(
-        '<div class="path-forecast-popup path-forecast-popup-loading">Lade Path Forecast …</div>',
+        `<div class="path-forecast-popup">${coordsHtml}<div class="path-forecast-popup-loading">Lade Path Forecast …</div></div>`,
         { minWidth: 220, maxWidth: 320 }
       );
       marker.openPopup();
@@ -863,11 +1045,12 @@ export default function MapPanel({
       fetch(`/api/propagation/path?toLat=${encodeURIComponent(lat)}&toLon=${encodeURIComponent(lon)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
         .then((data) => {
-          marker.setPopupContent(pathForecastPopupHtml(data));
+          marker.setPopupContent(pathForecastPopupHtml(data, lat, lon));
         })
         .catch((err) => {
+          const errCoords = loc && dms ? `<div class="path-forecast-popup-coords">${escapeHtml(loc)} · ${escapeHtml(dms)}</div>` : "";
           marker.setPopupContent(
-            `<div class="path-forecast-popup path-forecast-popup-error">Error: ${escapeHtml(err.message)}</div>`
+            `<div class="path-forecast-popup">${errCoords}<div class="path-forecast-popup path-forecast-popup-error">Error: ${escapeHtml(err.message)}</div></div>`
           );
         });
     });
@@ -1761,6 +1944,24 @@ export default function MapPanel({
             </button>
             <button
               type="button"
+              onClick={() => setAprsLayerOn((on) => !on)}
+              aria-label={aprsLayerOn ? "Hide APRS layer" : "Show APRS layer"}
+              title={aprsLayerOn ? "APRS layer on" : "APRS layer off – tracked stations from aprs.fi"}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 6,
+                border: "1px solid " + (aprsLayerOn ? "rgba(32,201,151,0.8)" : "rgba(255,255,255,0.2)"),
+                background: aprsLayerOn ? "rgba(32,201,151,0.35)" : "rgba(255,255,255,0.08)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: aprsLayerOn ? 700 : 400
+              }}
+            >
+              {aprsLayerOn ? "APRS ON" : "APRS OFF"}
+            </button>
+            <button
+              type="button"
               onClick={() => setHorizonLayerOn((on) => !on)}
               aria-label={horizonLayerOn ? "Hide Range layer" : "Show Range layer"}
               title={horizonLayerOn ? "Radio horizon and terrain layer on – click to hide" : "Range layer off – click to show circles and terrain polygon"}
@@ -1835,7 +2036,7 @@ export default function MapPanel({
           aria-label="Map"
           title="Click map for path forecast. Layers: Calls, DXped, xOTA, Beacons, Sats, Repeaters, Range."
         >
-      {(spotsLayerOn || dxpeditionsLayerOn || xotaLayerOn || satellitesLayerOn || repeatersLayerOn || horizonLayerOn) && (
+      {(spotsLayerOn || dxpeditionsLayerOn || xotaLayerOn || satellitesLayerOn || repeatersLayerOn || aprsLayerOn || horizonLayerOn) && (
         <>
           <div className="map-legend">
             {spotsLayerOn && (
@@ -1901,6 +2102,17 @@ export default function MapPanel({
                       <span className="map-legend-label">{label}</span>
                     </span>
                   ))}
+                </div>
+              </div>
+            )}
+            {aprsLayerOn && (
+              <div className="map-legend-box" style={{ border: "2px solid rgba(32,201,151,0.5)" }}>
+                <div className="map-legend-title">APRS</div>
+                <div className="map-legend-row">
+                  <span className="map-legend-item">
+                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#20c997", borderColor: "#20c997" }} />
+                    <span className="map-legend-label">Tracked stations</span>
+                  </span>
                 </div>
               </div>
             )}

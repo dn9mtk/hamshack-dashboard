@@ -104,7 +104,7 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId", "lat", "lon", "elevation"];
+const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId", "lat", "lon", "elevation", "wantedPrefixes"];
 app.post("/api/config", async (req, res) => {
   try {
     const body = req.body || {};
@@ -281,12 +281,23 @@ app.get("/api/sun", (req, res) => {
   if (!q) return res.status(400).json({ error: "Invalid locator" });
   const today = sunriseSunset(q.lat, q.lon, new Date());
   const tomorrow = sunriseSunset(q.lat, q.lon, new Date(Date.now() + 86400000));
+
+  const toLat = parseFloat(req.query.toLat);
+  const toLon = parseFloat(req.query.toLon);
+  let dx = null;
+  if (Number.isFinite(toLat) && Number.isFinite(toLon)) {
+    const dxToday = sunriseSunset(toLat, toLon, new Date());
+    const dxTomorrow = sunriseSunset(toLat, toLon, new Date(Date.now() + 86400000));
+    dx = { lat: toLat, lon: toLon, today: dxToday, tomorrow: dxTomorrow };
+  }
+
   res.json({
     locator: CONFIG.locator,
     lat: q.lat,
     lon: q.lon,
-    today: today,
-    tomorrow: tomorrow
+    today,
+    tomorrow,
+    dx
   });
 });
 
@@ -765,6 +776,107 @@ app.get("/api/propagation", async (req, res) => {
 });
 
 // --------------------
+// Band opening forecast – hourly MUF for path QTH → target
+// GET /api/propagation/forecast?toGrid=PM95&hours=24
+// --------------------
+const FORECAST_TARGETS = {
+  JA: { grid: "PM95", lat: 35.6, lon: 139.7, name: "Japan" },
+  VK: { grid: "QF56", lat: -25.3, lon: 133.8, name: "Australia" },
+  NA: { grid: "EM48", lat: 39.8, lon: -98.6, name: "North America" },
+  SA: { grid: "GG67", lat: -15.8, lon: -47.9, name: "South America" },
+  AF: { grid: "KG44", lat: -26.2, lon: 28.0, name: "South Africa" },
+  OC: { grid: "RJ99", lat: -21.3, lon: 166.5, name: "Oceania (NC)" }
+};
+
+app.get("/api/propagation/forecast", async (req, res) => {
+  try {
+    const fromQ = getQth();
+    if (!fromQ) return res.status(400).json({ error: "Invalid QTH locator", detail: "Set locator in config" });
+
+    const toGrid = String(req.query.toGrid || req.query.target || "").trim().toUpperCase();
+    const targetKey = Object.keys(FORECAST_TARGETS).find((k) => k === toGrid || FORECAST_TARGETS[k].grid === toGrid);
+    let toLat, toLon, targetName;
+    if (targetKey) {
+      const t = FORECAST_TARGETS[targetKey];
+      toLat = t.lat;
+      toLon = t.lon;
+      targetName = t.name;
+    } else if (toGrid && toGrid.length >= 4) {
+      const p = locatorToLatLon(toGrid);
+      if (!p) return res.status(400).json({ error: "Invalid toGrid", detail: "Use e.g. PM95 or JA" });
+      toLat = p.lat;
+      toLon = p.lon;
+      targetName = toGrid;
+    } else {
+      return res.status(400).json({ error: "Provide toGrid or target (e.g. JA, PM95, VK)" });
+    }
+
+    const hours = Math.min(48, Math.max(12, parseInt(req.query.hours, 10) || 24));
+
+    const space = await cached("propagation_sfi_kp", 60_000, async () => {
+      const out = { solarFlux: null };
+      try {
+        const r = await fetch("https://services.swpc.noaa.gov/json/f107_cm_flux.json");
+        const j = await r.json();
+        const last = j[j.length - 1];
+        out.solarFlux = last && Number.isFinite(Number(last.flux)) ? Number(last.flux) : null;
+      } catch {}
+      return out;
+    });
+    const sfi = Number.isFinite(space.solarFlux) && space.solarFlux > 0 ? space.solarFlux : 100;
+
+    function normLon(l) {
+      let x = l;
+      while (x > 180) x -= 360;
+      while (x < -180) x += 360;
+      return x;
+    }
+
+    const distKm = Math.max(0, distanceKm(fromQ.lat, fromQ.lon, toLat, toLon));
+    const bands = [
+      { name: "40m", freq: 7 },
+      { name: "20m", freq: 14 },
+      { name: "15m", freq: 21 },
+      { name: "10m", freq: 28 }
+    ];
+
+    const forecast = [];
+    const base = new Date();
+    base.setUTCMinutes(0, 0, 0);
+
+    for (let h = 0; h < hours; h++) {
+      const d = new Date(base.getTime() + h * 3600000);
+      const midLat = (fromQ.lat + toLat) / 2;
+      const midLon = normLon((fromQ.lon + toLon) / 2);
+      const foF2Mid = foF2MHz(midLat, midLon, d, sfi);
+      const mufPath = mufPathMHz(foF2Mid, distKm);
+
+      const bandStatus = {};
+      for (const b of bands) {
+        bandStatus[b.name] = mufPath >= b.freq * 0.9;
+      }
+
+      forecast.push({
+        utc: d.toISOString(),
+        mufPath: Math.round(mufPath * 10) / 10,
+        bands: bandStatus
+      });
+    }
+
+    res.json({
+      target: targetName,
+      toLat,
+      toLon,
+      distanceKm: Math.round(distKm),
+      forecast,
+      updated: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ error: "forecast_failed", detail: String(e) });
+  }
+});
+
+// --------------------
 // VOACAP-style path forecast (QTH → DX, 100 W CW assumption)
 // --------------------
 app.get("/api/propagation/path", async (req, res) => {
@@ -941,10 +1053,13 @@ app.get("/api/propagation/path", async (req, res) => {
       };
     }
 
+    const bearingTo = Math.round(bearingDeg(fromQ.lat, fromQ.lon, toLat, toLon));
+
     res.json({
       from: { lat: fromQ.lat, lon: fromQ.lon, locator: CONFIG.locator },
       to: { lat: toLat, lon: toLon, grid: toGrid || null },
       distanceKm: Math.round(distKm),
+      bearing: bearingTo,
       foF2Mid: Math.round(foF2Mid * 10) / 10,
       mufPath: Math.round(mufPath * 10) / 10,
       sfi,
@@ -1467,8 +1582,28 @@ function baseCallsign(call) {
   return call.trim().toUpperCase().split("/")[0];
 }
 
-app.get("/api/spots", (req, res) => {
-  const { band, mode, src, limit, spottedMe } = req.query;
+/** Check if spot could be reachable from QTH (MUF/FOT allows frequency, single-hop F2). Uses pre-fetched space. */
+function isSpotReachableSync(spot, fromQ, sfi) {
+  const lat = Number(spot.lat);
+  const lon = Number(spot.lon);
+  const freq = Number(spot.freq);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(freq) || freq <= 0) return false;
+  const distKm = distanceKm(fromQ.lat, fromQ.lon, lat, lon);
+  if (distKm < 200 || distKm > 4500) return false; // skip zone / beyond single-hop
+  const midLat = (fromQ.lat + lat) / 2;
+  const midLon = (fromQ.lon + lon) / 2;
+  const nowDate = new Date();
+  const flux = Number.isFinite(sfi) && sfi > 0 ? sfi : 100;
+  const foF2Mid = foF2MHz(midLat, midLon, nowDate, flux);
+  const mufPath = mufPathMHz(foF2Mid, distKm);
+  const fotPath = Math.max(0, 0.85 * mufPath);
+  const cosChiMid = solarZenithCos(midLat, midLon, nowDate);
+  const lufPath = lufEstimateMHz(cosChiMid);
+  return freq <= fotPath && freq >= lufPath * 0.8;
+}
+
+app.get("/api/spots", async (req, res) => {
+  const { band, mode, src, limit, spottedMe, reachable } = req.query;
 
   // Ensure all spots have spotter lat/lon for map connection lines (idempotent)
   spots.forEach((s) => enrichSpot(s));
@@ -1504,6 +1639,24 @@ app.get("/api/spots", (req, res) => {
       if (b === "40") return f >= 7.0 && f < 7.2;
       return true;
     });
+  }
+
+  if (reachable === "1" || reachable === "true") {
+    const q = locatorToLatLon(CONFIG.locator);
+    if (q) {
+      const space = await cached("propagation_sfi_kp", 60_000, async () => {
+        const out = { solarFlux: null };
+        try {
+          const r = await fetch("https://services.swpc.noaa.gov/json/f107_cm_flux.json");
+          const j = await r.json();
+          const last = j[j.length - 1];
+          out.solarFlux = last && Number.isFinite(Number(last.flux)) ? Number(last.flux) : null;
+        } catch {}
+        return out;
+      });
+      const sfi = Number.isFinite(space.solarFlux) && space.solarFlux > 0 ? space.solarFlux : 100;
+      out = out.filter((s) => isSpotReachableSync(s, q, sfi));
+    }
   }
 
   const lim = Math.max(1, Math.min(Number(limit || 80), 300));
@@ -1702,7 +1855,22 @@ app.get("/api/alerts", async (req, res) => {
       return out;
     });
     const list = Object.entries(data.alerts || {}).map(([type, message]) => ({ type, message }));
-    res.json({ alerts: list, updated: new Date().toISOString() });
+
+    // Wanted-DX: spots matching user-configured rare prefixes (no cache – spots change often)
+    let wantedDx = [];
+    const wantedRaw = (CONFIG.wantedPrefixes || "").trim();
+    if (wantedRaw) {
+      const wantedList = wantedRaw.split(/[\s,]+/).map((p) => p.trim().toUpperCase()).filter(Boolean);
+      if (wantedList.length > 0) {
+        spots.forEach((s) => enrichSpot(s));
+        wantedDx = spots.filter((s) => {
+          const p = (s.dxccPrefix || "").toUpperCase();
+          return wantedList.some((w) => p === w || p.startsWith(w) || w.startsWith(p));
+        }).slice(0, 8);
+      }
+    }
+
+    res.json({ alerts: list, wantedDx, updated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ error: "alerts_failed", detail: String(e) });
   }
@@ -2631,6 +2799,51 @@ app.get("/api/repeaters", (req, res) => {
   } catch (e) {
     console.warn("Repeaters read failed:", e?.message || e);
     res.status(500).json({ error: "repeaters_failed", detail: String(e), items: [] });
+  }
+});
+
+// GET /api/aprs/status – check if APRS (aprs.fi) is configured
+app.get("/api/aprs/status", (req, res) => {
+  const configured = !!(process.env.APRS_FI_API_KEY || "").trim();
+  res.json({ configured });
+});
+
+// GET /api/aprs?callsigns=XX1,XX2,... – fetch APRS station positions from aprs.fi
+app.get("/api/aprs", async (req, res) => {
+  const apiKey = process.env.APRS_FI_API_KEY;
+  if (!apiKey || apiKey.trim() === "") {
+    return res.status(503).json({ error: "aprs_not_configured", detail: "APRS_FI_API_KEY not set in .env", entries: [] });
+  }
+  const raw = (req.query.callsigns || "").toString().trim();
+  const callsigns = raw
+    .split(/[\s,;]+/)
+    .map((s) => s.trim().toUpperCase())
+    .filter((s) => s.length > 0)
+    .slice(0, 20);
+  if (callsigns.length === 0) {
+    return res.json({ entries: [], result: "ok" });
+  }
+  try {
+    const url = `https://api.aprs.fi/api/get?name=${encodeURIComponent(callsigns.join(","))}&what=loc&apikey=${encodeURIComponent(apiKey)}&format=json`;
+    const resp = await fetch(url, {
+      headers: { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" }
+    });
+    const data = await resp.json();
+    if (data.result === "fail") {
+      return res.status(502).json({ error: "aprs_fetch_failed", detail: data.description || "Unknown aprs.fi error", entries: [] });
+    }
+    const entries = (data.entries || []).map((e) => ({
+      name: e.name,
+      lat: e.lat ? Number(e.lat) : null,
+      lng: e.lng ? Number(e.lng) : null,
+      lasttime: e.lasttime,
+      comment: e.comment || "",
+      symbol: e.symbol || ""
+    }));
+    res.json({ entries, result: "ok" });
+  } catch (e) {
+    console.warn("APRS fetch failed:", e?.message || e);
+    res.status(502).json({ error: "aprs_fetch_failed", detail: String(e), entries: [] });
   }
 });
 

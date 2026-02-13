@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 
 export default function Settings({ open, onClose, onSaved }) {
-  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "", lat: "", lon: "", elevation: "" });
+  const [config, setConfig] = useState({ callsign: "", locator: "", qthName: "", pwsStationId: "", lat: "", lon: "", elevation: "", wantedPrefixes: "" });
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
@@ -22,7 +22,8 @@ export default function Settings({ open, onClose, onSaved }) {
           pwsStationId: data.pwsStationId ?? "",
           lat: data.lat != null && data.lat !== "" ? String(data.lat) : "",
           lon: data.lon != null && data.lon !== "" ? String(data.lon) : "",
-          elevation: data.elevation != null && data.elevation !== "" ? String(data.elevation) : ""
+          elevation: data.elevation != null && data.elevation !== "" ? String(data.elevation) : "",
+          wantedPrefixes: data.wantedPrefixes ?? ""
         });
       })
       .catch((e) => setErr(String(e)))
@@ -42,7 +43,8 @@ export default function Settings({ open, onClose, onSaved }) {
         qthName: (config.qthName || "").trim(),
         pwsStationId: (config.pwsStationId || "").trim().toUpperCase() || undefined,
         lat: config.lat !== "" && config.lat != null && Number.isFinite(Number(config.lat)) ? Number(config.lat) : null,
-        lon: config.lon !== "" && config.lon != null && Number.isFinite(Number(config.lon)) ? Number(config.lon) : null
+        lon: config.lon !== "" && config.lon != null && Number.isFinite(Number(config.lon)) ? Number(config.lon) : null,
+        wantedPrefixes: (config.wantedPrefixes || "").trim()
       })
     })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
@@ -148,6 +150,19 @@ export default function Settings({ open, onClose, onSaved }) {
               placeholder="e.g. Taunus Mountains * Germany"
               autoComplete="off"
             />
+            <label htmlFor="settings-wanted">Wanted DX prefixes (comma-separated)</label>
+            <input
+              id="settings-wanted"
+              type="text"
+              value={config.wantedPrefixes}
+              onChange={(e) => setConfig((c) => ({ ...c, wantedPrefixes: e.target.value.toUpperCase() }))}
+              placeholder="e.g. JA, VK, ZL, VK9"
+              autoComplete="off"
+              aria-describedby="settings-wanted-desc"
+            />
+            <p id="settings-wanted-desc" className="settings-hint" style={{ marginTop: -4, marginBottom: 8 }}>
+              Alert when these rare prefixes appear in spots.
+            </p>
             <label htmlFor="settings-pws">PWS station ID (Local Weather)</label>
             <input
               id="settings-pws"

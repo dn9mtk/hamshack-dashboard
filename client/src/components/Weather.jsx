@@ -43,8 +43,30 @@ export default function Weather({ stationId }) {
   const tempF = temp != null ? (temp * 9) / 5 + 32 : null;
   const feelsF = feels != null ? (feels * 9) / 5 + 32 : null;
 
+  // Open-Meteo weather codes: 61-67 rain, 80-82 rain showers, 95-99 thunderstorm
+  const code = data.weatherCode != null ? Number(data.weatherCode) : null;
+  const isRain = code != null && ((code >= 61 && code <= 67) || (code >= 80 && code <= 82));
+  const isThunderstorm = code != null && code >= 95 && code <= 99;
+  const weatherWarning = isThunderstorm ? "Thunderstorm – avoid outdoor antenna work, unplug rig during storms." : isRain ? "Rain – VHF/UHF attenuation possible; condensation risk on antenna." : null;
+
   return (
     <div style={{ display: "grid", gap: 8 }}>
+      {weatherWarning && (
+        <div
+          className="panel-error"
+          style={{
+            padding: 8,
+            borderRadius: 6,
+            border: "1px solid rgba(239,68,68,0.5)",
+            background: "rgba(239,68,68,0.15)",
+            fontSize: 12,
+            color: "rgba(254,202,202,0.95)"
+          }}
+          role="alert"
+        >
+          ⚠ {weatherWarning}
+        </div>
+      )}
       <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)" }}>
         {data.name || data.stationId} · {data.location || ""}
       </div>

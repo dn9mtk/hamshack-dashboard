@@ -48,17 +48,10 @@ export default function PSKReporter() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <label style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>Show</label>
         <select
+          className="ui-select"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          style={{
-            background: "rgba(255,255,255,0.08)",
-            color: "white",
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: 8,
-            padding: "6px 10px",
-            fontSize: 12,
-            outline: "none"
-          }}
+          aria-label="Show filter"
         >
           {FILTER_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
