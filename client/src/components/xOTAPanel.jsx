@@ -124,6 +124,20 @@ export default function XOTAPanel({
   if (items.length === 0) {
     return (
       <div className="news-panel-content news-panel-slider">
+        <div className="xota-program-toggle contests-toggle" role="group" aria-label="Select xOTA program">
+          {XOTA_PROGRAMS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`contests-toggle-btn ${program === p.id ? "active" : ""}`}
+              onClick={() => onProgramChange?.(p.id)}
+              aria-pressed={program === p.id}
+              title={p.id === "POTA" ? "Parks on the Air" : p.id === "SOTA" ? "Summits on the Air" : p.id === "IOTA" ? "Islands on the Air" : "Castles on the Air"}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
         <div className="news-slider-card" style={{ minHeight: 60 }}>
           <div className="panel-empty">No {prog.label} activators spotted. Try again later.</div>
         </div>

@@ -10,6 +10,13 @@ import DXpeditions from "./components/DXpeditions.jsx";
 import XOTAPanel from "./components/xOTAPanel.jsx";
 import Settings from "./components/Settings.jsx";
 import AlertsBar from "./components/AlertsBar.jsx";
+import AircraftPanel from "./components/AircraftPanel.jsx";
+import EarthquakePanel from "./components/EarthquakePanel.jsx";
+import WarningsPanel from "./components/WarningsPanel.jsx";
+import LightningPanel from "./components/LightningPanel.jsx";
+import TropoPanel from "./components/TropoPanel.jsx";
+import WSPRPanel from "./components/WSPRPanel.jsx";
+import DigitalPanel from "./components/DigitalPanel.jsx";
 import NewsPanel from "./components/NewsPanel.jsx";
 import SatellitesPanel from "./components/SatellitesPanel.jsx";
 import ContestsPanel from "./components/ContestsPanel.jsx";
@@ -30,7 +37,10 @@ function horizonKm(h1, h2) {
   if (!Number.isFinite(h1) || !Number.isFinite(h2) || h1 < 0 || h2 < 0) return null;
   return 4.12 * (Math.sqrt(h1) + Math.sqrt(h2));
 }
-function loadHorizonHeight() {
+function getAntennaHeight(configAntennaHeight) {
+  if (configAntennaHeight != null && Number.isFinite(Number(configAntennaHeight)) && Number(configAntennaHeight) >= 0) {
+    return Number(configAntennaHeight);
+  }
   try {
     const v = parseFloat(localStorage.getItem("hamshack_horizon_height"));
     return Number.isFinite(v) && v >= 0 ? v : 11;
@@ -57,7 +67,14 @@ const SIDEBAR_TABS = [
   { id: "muf", label: "MUF", title: "MUF and propagation prediction" },
   { id: "spots", label: "Spots", title: "DX Cluster / RBN spots – who is on the air" },
   { id: "psk", label: "PSK", title: "PSK Reporter – FT8, FT4 reports" },
-  { id: "sat", label: "Sat", title: "Satellite positions (ISS, amateur sats)" }
+  { id: "wspr", label: "WSPR", title: "WSPR statistics – real propagation data" },
+  { id: "digital", label: "Digital", title: "DMR/D-Star/Fusion reflectors + FT8 activity heatmap" },
+  { id: "lightning", label: "Blitz", title: "Lightning / thunderstorms – Blitzortung, outdoor safety, QRN" },
+  { id: "tropo", label: "Tropo", title: "VHF tropo – Hepburn, DXMaps, 2m/70cm propagation" },
+  { id: "sat", label: "Sat", title: "Satellite positions (ISS, amateur sats)" },
+  { id: "aircraft", label: "Aircraft", title: "ADS-B aircraft within configurable radius (OpenSky)" },
+  { id: "earthquakes", label: "Quakes", title: "Earthquakes – USGS feed with map layer" },
+  { id: "warnings", label: "Warn", title: "Katastrophenschutz – NINA/Katwarn (warnung.bund.de)" }
 ];
 
 function getInitialTab() {
@@ -77,12 +94,40 @@ export default function App() {
   const [repeatersBandFilter, setRepeatersBandFilter] = useState("2m"); // "2m" | "70cm" | "10m"
   const [selectedRepeater, setSelectedRepeater] = useState(null);
   const [focusedRepeater, setFocusedRepeater] = useState(null);
+  const [focusedAircraft, setFocusedAircraft] = useState(null);
+  const [focusedEarthquake, setFocusedEarthquake] = useState(null);
   const [sunData, setSunData] = useState(null);
   const [sidebarTab, setSidebarTab] = useState(getInitialTab);
   const [rigFreq, setRigFreq] = useState(loadRigFreq);
   const [radioHorizon, setRadioHorizon] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [aircraftRadiusKm, setAircraftRadiusKm] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem("hamshack_aircraft_radius_km"), 10);
+      return Number.isFinite(v) && v >= 5 && v <= 100 ? v : 12;
+    } catch {
+      return 12;
+    }
+  });
+  const [earthquakeMag, setEarthquakeMag] = useState(() => {
+    try {
+      const raw = localStorage.getItem("hamshack_earthquake_filters");
+      const j = raw ? JSON.parse(raw) : {};
+      return ["2.5", "4.5", "all"].includes(j.mag) ? j.mag : "2.5";
+    } catch {
+      return "2.5";
+    }
+  });
+  const [earthquakePeriod, setEarthquakePeriod] = useState(() => {
+    try {
+      const raw = localStorage.getItem("hamshack_earthquake_filters");
+      const j = raw ? JSON.parse(raw) : {};
+      return ["day", "week"].includes(j.period) ? j.period : "week";
+    } catch {
+      return "week";
+    }
+  });
 
   function handleRigFreqChange(value) {
     setRigFreq(value);
@@ -107,6 +152,7 @@ export default function App() {
         lat: data.lat,
         lon: data.lon,
         elevation: data.elevation,
+        antennaHeight: data.antennaHeight,
         wantedPrefixes: data.wantedPrefixes ?? ""
       }))
       .catch(() => {});
@@ -139,7 +185,7 @@ export default function App() {
       setRadioHorizon(null);
       return;
     }
-    const h1 = loadHorizonHeight();
+    const h1 = getAntennaHeight(config.antennaHeight);
     const ground = horizonKm(h1, 0);
     if (ground == null) return;
     setRadioHorizon({
@@ -148,7 +194,7 @@ export default function App() {
       mobile: horizonKm(h1, 2),
       base: horizonKm(h1, 10)
     });
-  }, [config.locator, config.lat, config.lon]);
+  }, [config.locator, config.lat, config.lon, config.antennaHeight]);
 
   useEffect(() => {
     function loadSun() {
@@ -353,6 +399,7 @@ export default function App() {
                 <RangePanel
                   locator={config.locator}
                   rigFreq={rigFreq}
+                  antennaHeight={config.antennaHeight != null && config.antennaHeight !== "" ? Number(config.antennaHeight) : getAntennaHeight()}
                   onHorizonChange={setRadioHorizon}
                 />
               </div>
@@ -387,10 +434,64 @@ export default function App() {
                 <PSKReporter />
               </div>
             )}
+            {sidebarTab === "wspr" && (
+              <div className="panel">
+                <h2>WSPR Statistics</h2>
+                <WSPRPanel locator={config.locator} />
+              </div>
+            )}
+            {sidebarTab === "digital" && (
+              <div className="panel">
+                <h2>Digital modes</h2>
+                <DigitalPanel callsign={config.callsign} />
+              </div>
+            )}
+            {sidebarTab === "lightning" && (
+              <div className="panel">
+                <h2>Lightning / Thunderstorms</h2>
+                <LightningPanel />
+              </div>
+            )}
+            {sidebarTab === "tropo" && (
+              <div className="panel">
+                <h2>VHF Tropo</h2>
+                <TropoPanel />
+              </div>
+            )}
             {sidebarTab === "sat" && (
               <div className="panel">
                 <h2>Satellites</h2>
                 <SatellitesPanel />
+              </div>
+            )}
+            {sidebarTab === "aircraft" && (
+              <div className="panel">
+                <h2>Aircraft</h2>
+                <AircraftPanel
+                  radiusKm={aircraftRadiusKm}
+                  onRadiusChange={(km) => setAircraftRadiusKm(km)}
+                  locator={config.locator}
+                  onFocusOnMap={setFocusedAircraft}
+                />
+              </div>
+            )}
+            {sidebarTab === "earthquakes" && (
+              <div className="panel">
+                <h2>Earthquakes</h2>
+                <EarthquakePanel
+                  mag={earthquakeMag}
+                  period={earthquakePeriod}
+                  onMagChange={setEarthquakeMag}
+                  onPeriodChange={setEarthquakePeriod}
+                  locator={config.locator}
+                  onFocusOnMap={setFocusedEarthquake}
+                />
+              </div>
+            )}
+            {sidebarTab === "warnings" && (
+              <div className="panel">
+                <h2>Katastrophenschutz</h2>
+                <WarningsPanel />
               </div>
             )}
           </div>
@@ -399,10 +500,16 @@ export default function App() {
           <MapPanel
             dxpeditionsFilter={dxpeditionsFilter}
             focusedXotaItem={focusedXotaItem}
+            focusedAircraft={focusedAircraft}
+            focusedEarthquake={focusedEarthquake}
             repeatersBandFilter={repeatersBandFilter}
             onRepeatersBandChange={setRepeatersBandFilter}
             focusedRepeater={focusedRepeater}
             radioHorizon={radioHorizon}
+            antennaHeight={getAntennaHeight(config.antennaHeight)}
+            aircraftRadiusKm={aircraftRadiusKm}
+            earthquakeMag={earthquakeMag}
+            earthquakePeriod={earthquakePeriod}
             onSelectRepeater={(rep) => {
               if (rep?.band) {
                 setRepeatersBandFilter(rep.band);

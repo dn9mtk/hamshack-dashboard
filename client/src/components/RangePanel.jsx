@@ -13,7 +13,8 @@ const CAROUSEL_ITEMS = [
   { id: "linkbudget", label: "Link Budget" },
   { id: "terrain", label: "Terrain" },
 ];
-function loadHorizonHeight() {
+function loadHorizonHeight(propValue) {
+  if (propValue != null && Number.isFinite(propValue) && propValue >= 0) return propValue;
   try {
     const v = parseFloat(localStorage.getItem(HORIZON_HEIGHT_KEY));
     return Number.isFinite(v) && v >= 0 ? v : 11;
@@ -45,11 +46,11 @@ function rigFreqToMHz(rigFreq) {
   return f >= 1000 ? f / 1000 : f;
 }
 
-export default function RangePanel({ locator, rigFreq, onHorizonChange }) {
+export default function RangePanel({ locator, rigFreq, antennaHeight: antennaHeightProp, onHorizonChange }) {
   const [index, setIndex] = useState(0);
   const [linkBudgetInfoOpen, setLinkBudgetInfoOpen] = useState(false);
   const [horizonInfoOpen, setHorizonInfoOpen] = useState(false);
-  const [h1, setH1] = useState(loadHorizonHeight);
+  const h1 = loadHorizonHeight(antennaHeightProp);
   const [powerW, setPowerW] = useState(4);
   const [gainDbi, setGainDbi] = useState(5);
   const [distKm, setDistKm] = useState(20);
@@ -87,12 +88,6 @@ export default function RangePanel({ locator, rigFreq, onHorizonChange }) {
   }, [go]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(HORIZON_HEIGHT_KEY, String(h1));
-    } catch {}
-  }, [h1]);
-
-  useEffect(() => {
     if (!onHorizonChange) return;
     if (qth && horizonResults?.ground != null) {
       onHorizonChange({ center: qth, ground: horizonResults.ground, mobile: horizonResults.mobile, base: horizonResults.base });
@@ -128,19 +123,10 @@ export default function RangePanel({ locator, rigFreq, onHorizonChange }) {
                     </button>
                   </div>
                   <p className="range-formula">d_km ≈ 4.12 × (√h₁ + √h₂)</p>
-                  <div className="range-input-block">
-                    <label htmlFor="range-h1">Antenna height (m)</label>
-                    <input
-                      id="range-h1"
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={h1}
-                      onChange={(e) => setH1(parseFloat(e.target.value) || 0)}
-                      aria-label="Antenna height in meters"
-                    />
-                  </div>
-                  <div className="range-results-block">
+                  <p className="range-description" style={{ marginTop: 4 }}>
+                    Antenna height from Settings. Horizon circles shown on map when Range layer is on.
+                  </p>
+                  <div className="range-results-block" style={{ marginTop: 12 }}>
                     <div className="range-result-item">
                       <span className="range-result-dot" style={{ background: "rgba(230,119,0,0.8)" }} aria-hidden />
                       <span>vs. ground</span>
@@ -161,7 +147,7 @@ export default function RangePanel({ locator, rigFreq, onHorizonChange }) {
                 <div className="range-flip-back range-slide">
                   <h3 className="range-slide-title">Radio Horizon erklärt</h3>
                   <div className="range-flip-back-content">
-                    <p>Die Reichweite bis zum Horizont hängt von der Antennenhöhe ab. Die Formel nutzt den effektiven Erdradius (4/3 für troposphärische Brechung).</p>
+                    <p>Die Reichweite bis zum Horizont hängt von der Antennenhöhe ab (einstellbar in Settings). Die Formel nutzt den effektiven Erdradius (4/3 für troposphärische Brechung).</p>
                     <p><strong>Ground</strong> – Sichtlinie zur Bodenhöhe (0 m). Typisch für Bodenstationen oder SOTA-Gipfelkontakte.</p>
                     <p><strong>Mobile</strong> – Gegenstelle ca. 2 m hoch (Handfunkgerät, Auto). Relevante Reichweite für VHF/UHF-Mobilfunk.</p>
                     <p><strong>Base</strong> – Gegenstelle ca. 10 m hoch (Basisantenne, Repeater-Mast). Maximaltypische Reichweite bei beiden Stationen im Flachland.</p>

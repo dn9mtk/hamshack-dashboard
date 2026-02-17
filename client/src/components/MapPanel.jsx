@@ -6,6 +6,7 @@ import { buildSpotQuery } from "../lib/spotsQuery.js";
 import { gridCenter } from "../lib/grid.js";
 import { latLonToLocator, latLonToDms } from "../lib/geo.js";
 import { formatDateRange } from "../lib/time.js";
+import { getAirportName } from "../lib/airports.js";
 
 // Fix Leaflet default icon issue
 delete L.Icon.Default.prototype._getIconUrl;
@@ -37,6 +38,9 @@ const BEACONS_LAYER_KEY = "hamshack_beacons_layer";
 const SATELLITES_LAYER_KEY = "hamshack_satellites_layer";
 const REPEATERS_LAYER_KEY = "hamshack_repeaters_layer";
 const APRS_LAYER_KEY = "hamshack_aprs_layer";
+const AIRCRAFT_LAYER_KEY = "hamshack_aircraft_layer";
+const EARTHQUAKES_LAYER_KEY = "hamshack_earthquakes_layer";
+const LIGHTNING_LAYER_KEY = "hamshack_lightning_layer";
 const HORIZON_LAYER_KEY = "hamshack_horizon_layer";
 const HORIZON_COLORS = {
   ground: { color: "rgba(230,119,0,0.9)", fill: "rgba(230,119,0,0.2)" },
@@ -225,6 +229,22 @@ function loadAprsLayerPref() {
   }
 }
 
+function loadAircraftLayerPref() {
+  try {
+    return localStorage.getItem(AIRCRAFT_LAYER_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function loadEarthquakesLayerPref() {
+  try {
+    return localStorage.getItem(EARTHQUAKES_LAYER_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function loadAprsCallsigns() {
   try {
     const raw = localStorage.getItem("hamshack_aprs_callsigns") || "";
@@ -312,11 +332,17 @@ const REPEATER_DEFAULT_COLOR = "#868e96";
 export default function MapPanel({
   dxpeditionsFilter = "all",
   focusedXotaItem,
+  focusedAircraft,
+  focusedEarthquake,
   repeatersBandFilter = "2m",
   onRepeatersBandChange,
   onSelectRepeater,
   focusedRepeater,
-  radioHorizon = null
+  radioHorizon = null,
+  antennaHeight = 11,
+  aircraftRadiusKm = 12,
+  earthquakeMag = "2.5",
+  earthquakePeriod = "week"
 }) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
@@ -335,6 +361,10 @@ export default function MapPanel({
   const xotaLayerRef = useRef(null);
   const repeaterLayerRef = useRef(null);
   const aprsLayerRef = useRef(null);
+  const aircraftLayerRef = useRef(null);
+  const aircraftTrackLayerRef = useRef(null);
+  const aircraftRadiusCircleRef = useRef(null);
+  const earthquakeLayerRef = useRef(null);
   const mufOverlayRef = useRef(null);
   const bandOverlayRef = useRef(null);
   const lufOverlayRef = useRef(null);
@@ -343,6 +373,7 @@ export default function MapPanel({
   const horizonLayerRef = useRef(null);
   const qthMarkerRef = useRef(null);
   const currentFiltersRef = useRef(loadSavedFilters());
+  const antennaHeightRef = useRef(antennaHeight);
 
   const [mapReady, setMapReady] = useState(false);
   const [selectedSatId, setSelectedSatId] = useState(null);
@@ -363,6 +394,15 @@ export default function MapPanel({
   const [repeatersLayerOn, setRepeatersLayerOn] = useState(() => loadRepeatersLayerPref());
   const [aprsLayerOn, setAprsLayerOn] = useState(() => loadAprsLayerPref());
   const [aprsCallsignsVersion, setAprsCallsignsVersion] = useState(0);
+  const [aircraftLayerOn, setAircraftLayerOn] = useState(() => loadAircraftLayerPref());
+  const [earthquakesLayerOn, setEarthquakesLayerOn] = useState(() => loadEarthquakesLayerPref());
+  const [lightningLayerOn, setLightningLayerOn] = useState(() => {
+    try {
+      return localStorage.getItem(LIGHTNING_LAYER_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [horizonLayerOn, setHorizonLayerOn] = useState(() => loadHorizonLayerPref());
   const [spaceSummary, setSpaceSummary] = useState(null);
   const [perspectiveGrid, setPerspectiveGrid] = useState("");
@@ -373,6 +413,7 @@ export default function MapPanel({
   useEffect(() => {
     setPathTargetActiveRef.current = setPathTargetMarkerActive;
   }, []);
+  useEffect(() => { antennaHeightRef.current = antennaHeight; }, [antennaHeight]);
 
   function removePathTargetMarker() {
     if (pathTargetMarkerRef.current && mapRef.current) {
@@ -380,6 +421,33 @@ export default function MapPanel({
       pathTargetMarkerRef.current = null;
       setPathTargetMarkerActive(false);
     }
+  }
+
+  function turnOffAllOtherLayers() {
+    setSpotsLayerOn(false);
+    setDxpeditionsLayerOn(false);
+    setXotaLayerOn(false);
+    setBeaconsLayerOn(false);
+    setSatellitesLayerOn(false);
+    setRepeatersLayerOn(false);
+    setAprsLayerOn(false);
+    setAircraftLayerOn(false);
+    setEarthquakesLayerOn(false);
+    setHorizonLayerOn(false);
+  }
+
+  function handleLightningToggle() {
+    setLightningLayerOn((on) => {
+      if (!on) turnOffAllOtherLayers();
+      return !on;
+    });
+  }
+
+  function handleOtherLayerToggle(setter) {
+    return () => {
+      setLightningLayerOn(false);
+      setter((on) => !on);
+    };
   }
 
   useEffect(() => {
@@ -450,6 +518,24 @@ export default function MapPanel({
       localStorage.setItem(APRS_LAYER_KEY, aprsLayerOn ? "true" : "false");
     } catch {}
   }, [aprsLayerOn]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AIRCRAFT_LAYER_KEY, aircraftLayerOn ? "true" : "false");
+    } catch {}
+  }, [aircraftLayerOn]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EARTHQUAKES_LAYER_KEY, earthquakesLayerOn ? "true" : "false");
+    } catch {}
+  }, [earthquakesLayerOn]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIGHTNING_LAYER_KEY, lightningLayerOn ? "true" : "false");
+    } catch {}
+  }, [lightningLayerOn]);
 
   useEffect(() => {
     const handler = () => setAprsLayerOn(true);
@@ -555,6 +641,33 @@ export default function MapPanel({
     }
   }, [aprsLayerOn, mapReady]);
 
+  // Sync Aircraft + Aircraft track layer visibility with map
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = aircraftLayerRef.current;
+    const trackLayer = aircraftTrackLayerRef.current;
+    if (!map || !layer || !trackLayer) return;
+    if (aircraftLayerOn) {
+      if (!map.hasLayer(layer)) map.addLayer(layer);
+      if (!map.hasLayer(trackLayer)) map.addLayer(trackLayer);
+    } else {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+      if (map.hasLayer(trackLayer)) map.removeLayer(trackLayer);
+    }
+  }, [aircraftLayerOn, mapReady]);
+
+  // Sync Earthquakes layer visibility with map
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = earthquakeLayerRef.current;
+    if (!map || !layer) return;
+    if (earthquakesLayerOn) {
+      if (!map.hasLayer(layer)) map.addLayer(layer);
+    } else {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    }
+  }, [earthquakesLayerOn, mapReady]);
+
   // DXpeditions layer: fetch and draw markers by filter (all / active / upcoming)
   useEffect(() => {
     let alive = true;
@@ -598,6 +711,7 @@ export default function MapPanel({
             (x.url ? `<div class="dxped-popup-link"><a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">More info ↗</a></div>` : "") +
             `</div>`;
           marker.bindPopup(popupContent);
+          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.callsign)}</strong><br/>${escapeHtml(x.entity || "—")}${dateStr ? `<br/>${escapeHtml(dateStr)}` : ""}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
         });
       } catch (err) {
         console.warn("DXpeditions layer:", err);
@@ -661,6 +775,8 @@ export default function MapPanel({
             fillColor: color
           }).addTo(layer);
           marker.bindPopup(popupContent, { autoPan: false });
+          const freqS = x.freqMhz != null ? `${x.freqMhz.toFixed(2)} MHz` : (x.frequency || "—");
+          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.activator)} · ${escapeHtml(label)}</strong><br/>${escapeHtml(refStr)}<br/>${escapeHtml(freqS)} · ${escapeHtml(x.mode || "—")}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
         });
       } catch (err) {
         console.warn("xOTA layer:", err);
@@ -714,6 +830,7 @@ export default function MapPanel({
             `<div class="dxped-popup-dates">${escapeHtml(x.band || "")}</div>` +
             `</div>`;
           marker.bindPopup(popupContent);
+          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.callsign || "—")}</strong><br/>${escapeHtml(freqStr)}${escapeHtml(offsetStr)} · ${escapeHtml(x.band || "")}${x.city ? `<br/>${escapeHtml(x.city)}` : ""}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
 
           // When clicking a repeater marker, notify the app so the sidebar
           // \"Repeater\" panel can select the corresponding entry.
@@ -784,6 +901,7 @@ export default function MapPanel({
             `<div class="dxped-popup-link"><a href="${aprsFiUrl}" target="_blank" rel="noopener noreferrer">aprs.fi ↗</a></div>` +
             `</div>`;
           marker.bindPopup(popupContent, { autoPan: false });
+          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.name || "—")}</strong>${comment ? `<br/>${escapeHtml(comment.substring(0, 50))}${comment.length > 50 ? "…" : ""}` : ""}${lastTime ? `<br/>${escapeHtml(lastTime)}` : ""}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
         });
       } catch (err) {
         if (alive) console.warn("APRS layer:", err);
@@ -800,6 +918,303 @@ export default function MapPanel({
     }
     return () => { alive = false; };
   }, [aprsLayerOn, aprsCallsignsVersion, mapReady]);
+
+  // Aircraft layer: OpenSky API, 12 km radius around QTH
+  useEffect(() => {
+    let alive = true;
+    const layer = aircraftLayerRef.current;
+    const trackLayer = aircraftTrackLayerRef.current;
+    const map = mapRef.current;
+    if (!layer || !trackLayer || !map) return;
+
+    async function fetchAndDrawTrack(icao24) {
+      if (!icao24 || !trackLayer) return;
+      try {
+        const r = await fetch(`/api/aircraft/track?icao24=${encodeURIComponent(icao24)}&time=0`);
+        if (!r.ok) throw new Error(r.status);
+        const j = await r.json();
+        const path = j.path || [];
+        if (path.length < 2) return;
+        trackLayer.clearLayers();
+        const latLngs = path.map((p) => [p.latitude, p.longitude]);
+        const poly = L.polyline(latLngs, {
+          color: "rgba(245,159,0,0.8)",
+          weight: 3,
+          opacity: 0.9,
+          dashArray: "8,8"
+        }).addTo(trackLayer);
+        map.fitBounds(poly.getBounds(), { padding: [40, 40], maxZoom: 12 });
+      } catch (err) {
+        console.warn("Aircraft track fetch:", err);
+      }
+    }
+
+    function buildAircraftPopupHtml(a, routeData = null) {
+      const call = (a.callsign || a.icao24 || "—").toString().trim();
+      const alt = a.baro_altitude != null ? `${Math.round(a.baro_altitude)} m` : "—";
+      const geoAlt = a.geo_altitude != null ? `${Math.round(a.geo_altitude)} m` : null;
+      const vel = a.velocity != null ? `${Math.round(a.velocity * 1.944)} kt` : "—";
+      const track = a.true_track != null ? `${Math.round(a.true_track)}°` : "—";
+      const vRate = a.vertical_rate != null ? `${a.vertical_rate > 0 ? "+" : ""}${Math.round(a.vertical_rate * 196.85)} ft/min` : null;
+      const country = a.origin_country || "";
+      const cat = a.category_label || null;
+      const posSrc = a.position_source_label || null;
+      const squawk = a.squawk || null;
+      const icao = a.icao24 || "—";
+      const onGround = a.on_ground ? " (on ground)" : "";
+      const typeStr = [a.typecode, a.model].filter(Boolean).join(" / ") || "—";
+      const operator = a.operator || "—";
+      const reg = a.registration || "—";
+      const manufacturer = a.manufacturer || "";
+      const owner = a.owner || "";
+      const built = a.built || "";
+      const serialNum = a.serialNumber || "";
+
+      function airportSpan(code) {
+        if (!code || code === "—") return escapeHtml("—");
+        const name = getAirportName(code);
+        const c = String(code).trim();
+        return name ? `<span title="${escapeHtml(name)}">${escapeHtml(c)}</span>` : escapeHtml(c);
+      }
+      let routeLine = "";
+      if (routeData && (routeData.origin || routeData.destination)) {
+        routeLine = `<div class="dxped-popup-dates">Origin ${airportSpan(routeData.origin)} → Destination ${airportSpan(routeData.destination)}</div>`;
+        if (routeData.airline) routeLine += `<div class="dxped-popup-dates">Airline ${escapeHtml(routeData.airline)}</div>`;
+        if (routeData.departure || routeData.arrival) {
+          const depStr = routeData.departure ? new Date(routeData.departure).toISOString().slice(11, 16) + " UTC" : "—";
+          const arrStr = routeData.arrival ? new Date(routeData.arrival).toISOString().slice(11, 16) + " UTC" : "—";
+          routeLine += `<div class="dxped-popup-dates">Dep ${depStr} · Arr ${arrStr}</div>`;
+        }
+      } else {
+        routeLine = `<div class="dxped-popup-dates">Origin — → Destination —</div><div class="dxped-popup-link"><a href="#" data-action="load-route" data-callsign="${escapeHtml(call)}">Load flight route</a></div>`;
+      }
+
+      const extraMeta = [manufacturer, owner, built, serialNum].filter(Boolean);
+      const extraMetaLine = extraMeta.length ? `<div class="dxped-popup-dates">${escapeHtml(extraMeta.join(" · "))}</div>` : "";
+
+      const faUrl = call !== "—" ? `https://flightaware.com/live/flight/${encodeURIComponent(call)}` : "#";
+      const fr24Url = call !== "—" ? `https://www.flightradar24.com/${encodeURIComponent(call)}` : "#";
+      const wikiQuery = (a.model || a.typecode || "").replace(/\s+/g, "+");
+      const wikiUrl = wikiQuery ? `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(a.model || a.typecode || "")}` : "#";
+
+      return (
+        `<div class="dxped-popup-line1">${escapeHtml(call)}${escapeHtml(onGround)}</div>` +
+        (country ? `<div class="dxped-popup-entity">${escapeHtml(country)}</div>` : "") +
+        (cat ? `<div class="dxped-popup-dates">${escapeHtml(cat)}</div>` : "") +
+        `<div class="dxped-popup-dates">Type ${escapeHtml(typeStr)} · Operator ${escapeHtml(operator)} · Reg ${escapeHtml(reg)}</div>` +
+        extraMetaLine +
+        routeLine +
+        `<div class="dxped-popup-dates">Alt ${escapeHtml(alt)}${geoAlt ? ` · Geo ${escapeHtml(geoAlt)}` : ""} · ${escapeHtml(vel)} · ${escapeHtml(track)}</div>` +
+        (vRate ? `<div class="dxped-popup-dates">Vertical ${escapeHtml(vRate)}</div>` : "") +
+        (squawk ? `<div class="dxped-popup-dates">Squawk ${escapeHtml(squawk)}</div>` : "") +
+        (posSrc ? `<div class="dxped-popup-dates">${escapeHtml(posSrc)}</div>` : "") +
+        `<div class="dxped-popup-dates">ICAO24 ${escapeHtml(String(icao))}</div>` +
+        `<div class="dxped-popup-link" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:8px;">` +
+        (call !== "—" ? `<a href="${faUrl}" target="_blank" rel="noopener noreferrer">FlightAware ↗</a>` : "") +
+        (call !== "—" ? `<a href="${fr24Url}" target="_blank" rel="noopener noreferrer">FlightRadar24 ↗</a>` : "") +
+        (wikiQuery ? `<a href="${wikiUrl}" target="_blank" rel="noopener noreferrer">Wikipedia</a>` : "") +
+        `</div>` +
+        (a.icao24 ? `<div class="dxped-popup-link" style="margin-top:4px"><a href="#" data-action="show-route">Show route on map</a></div>` : "")
+      );
+    }
+
+    function buildAircraftPopup(a) {
+      const div = document.createElement("div");
+      div.className = "dxped-popup aircraft-popup";
+      div.innerHTML = buildAircraftPopupHtml(a);
+      div.querySelectorAll('[data-action="load-route"]').forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          const callsign = btn.getAttribute("data-callsign") || a.callsign || "";
+          if (!callsign) return;
+          btn.textContent = "Loading…";
+          try {
+            const r = await fetch(`/api/aircraft/flight-info?flight_icao=${encodeURIComponent(callsign)}`);
+            const routeData = r.ok ? await r.json() : null;
+            div.innerHTML = buildAircraftPopupHtml(a, routeData);
+            reattachAircraftPopupHandlers(div, a);
+          } catch {
+            btn.textContent = "Load flight route";
+          }
+        });
+      });
+      const showRouteBtn = div.querySelector('[data-action="show-route"]');
+      if (showRouteBtn && a.icao24) {
+        showRouteBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          fetchAndDrawTrack(a.icao24);
+        });
+      }
+      return div;
+    }
+
+    function reattachAircraftPopupHandlers(div, a) {
+      const showRouteBtn = div.querySelector('[data-action="show-route"]');
+      if (showRouteBtn && a.icao24) {
+        showRouteBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          fetchAndDrawTrack(a.icao24);
+        });
+      }
+    }
+
+    async function refreshAircraft() {
+      try {
+        const r = await fetch(`/api/aircraft?radiusKm=${encodeURIComponent(aircraftRadiusKm)}`);
+        if (!r.ok || !alive) return;
+        const j = await r.json();
+        const list = j.aircraft || [];
+        layer.clearLayers();
+        const AIRCRAFT_COLOR = "#f59f00";
+        list.forEach((a) => {
+          const lat = Number(a.latitude);
+          const lon = Number(a.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          const marker = L.circleMarker([lat, lon], {
+            radius: 6,
+            weight: 2,
+            fillOpacity: 0.9,
+            color: AIRCRAFT_COLOR,
+            fillColor: AIRCRAFT_COLOR
+          }).addTo(layer);
+          marker.bindPopup(buildAircraftPopup(a), { autoPan: false });
+          const call = (a.callsign || a.icao24 || "—").toString();
+          const line2 = [[a.typecode, a.model].filter(Boolean).join(" / ") || null, a.operator, a.registration].filter(Boolean).join(" · ");
+          const line3 = [a.origin_country, a.baro_altitude != null ? `${Math.round(a.baro_altitude)} m` : null, a.velocity != null ? `${Math.round(a.velocity * 1.944)} kt` : null, a.true_track != null ? `${Math.round(a.true_track)}°` : null].filter(Boolean).join(" · ") + (a.on_ground ? " · GND" : "");
+          const tt = `<div class="map-marker-tooltip"><strong>${escapeHtml(call)}</strong>${line2 ? `<br/>${escapeHtml(line2)}` : ""}${line3 ? `<br/>${escapeHtml(line3)}` : ""}</div>`;
+          marker.bindTooltip(tt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+        });
+      } catch (err) {
+        if (alive) console.warn("Aircraft layer:", err);
+      }
+    }
+
+    if (aircraftLayerOn) {
+      refreshAircraft();
+      const id = setInterval(refreshAircraft, 15 * 1000); // 15 s
+      return () => {
+        alive = false;
+        clearInterval(id);
+      };
+    }
+    return () => { alive = false; };
+  }, [aircraftLayerOn, aircraftRadiusKm, mapReady]);
+
+  // Aircraft radius circle on map (when aircraft layer is on)
+  useEffect(() => {
+    const map = mapRef.current;
+    const prev = aircraftRadiusCircleRef.current;
+    if (prev && map && map.hasLayer(prev)) {
+      map.removeLayer(prev);
+      aircraftRadiusCircleRef.current = null;
+    }
+    if (!aircraftLayerOn || !radioHorizon?.center || !map) return;
+    const { lat, lon } = radioHorizon.center;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    const radiusM = (aircraftRadiusKm || 12) * 1000;
+    const circle = L.circle([lat, lon], {
+      radius: radiusM,
+      color: "rgba(245,159,0,0.85)",
+      fillColor: "rgba(245,159,0,0.12)",
+      fillOpacity: 1,
+      weight: 2
+    }).addTo(map);
+    aircraftRadiusCircleRef.current = circle;
+    return () => {
+      if (aircraftRadiusCircleRef.current && map && map.hasLayer(aircraftRadiusCircleRef.current)) {
+        map.removeLayer(aircraftRadiusCircleRef.current);
+      }
+      aircraftRadiusCircleRef.current = null;
+    };
+  }, [aircraftLayerOn, aircraftRadiusKm, radioHorizon]);
+
+  // Earthquakes layer: USGS feed
+  useEffect(() => {
+    let alive = true;
+    const layer = earthquakeLayerRef.current;
+    const map = mapRef.current;
+    if (!layer || !map) return;
+
+    function eqColorByMag(mag) {
+      const m = Number(mag) || 0;
+      if (m >= 6) return "#c92a2a";
+      if (m >= 5) return "#e67700";
+      if (m >= 4) return "#f59f00";
+      return "#51cf66";
+    }
+
+    function fmtEqTime(ts) {
+      if (ts == null || !Number.isFinite(ts)) return "—";
+      const d = new Date(ts);
+      return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    async function refreshEarthquakes() {
+      try {
+        const params = new URLSearchParams({ mag: earthquakeMag, period: earthquakePeriod });
+        const r = await fetch(`/api/earthquakes?${params}`);
+        if (!r.ok || !alive) return;
+        const j = await r.json();
+        const list = j.earthquakes || [];
+        layer.clearLayers();
+        list.forEach((eq) => {
+          const lat = Number(eq.latitude);
+          const lon = Number(eq.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          const color = eqColorByMag(eq.magnitude);
+          const radius = Math.min(10, Math.max(4, (eq.magnitude || 3) * 1.5));
+          const marker = L.circleMarker([lat, lon], {
+            radius,
+            weight: 2,
+            fillOpacity: 0.85,
+            color,
+            fillColor: color
+          }).addTo(layer);
+          const magStr = eq.magnitude != null ? `M ${Number(eq.magnitude).toFixed(1)}` : "—";
+          const placeStr = escapeHtml(eq.place || "—");
+          const popupHtml = `<div class="dxped-popup-line1">${magStr} · ${placeStr}</div>` +
+            `<div class="dxped-popup-dates">${fmtEqTime(eq.time)}</div>` +
+            (eq.depth != null ? `<div class="dxped-popup-dates">Depth ${Math.round(eq.depth)} km</div>` : "") +
+            (eq.tsunami ? `<div class="dxped-popup-dates" style="color:#f59f00;font-weight:600">Tsunami watch</div>` : "") +
+            (eq.url ? `<div class="dxped-popup-link"><a href="${eq.url}" target="_blank" rel="noopener noreferrer">USGS event ↗</a></div>` : "");
+          marker.bindPopup(popupHtml, { autoPan: false });
+          const tt = `<div class="map-marker-tooltip"><strong>${magStr}</strong><br/>${placeStr}</div>`;
+          marker.bindTooltip(tt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+        });
+      } catch (err) {
+        if (alive) console.warn("Earthquakes layer:", err);
+      }
+    }
+
+    if (earthquakesLayerOn) {
+      refreshEarthquakes();
+      const id = setInterval(refreshEarthquakes, 5 * 60 * 1000); // 5 min
+      return () => {
+        alive = false;
+        clearInterval(id);
+      };
+    }
+    return () => { alive = false; };
+  }, [earthquakesLayerOn, earthquakeMag, earthquakePeriod, mapReady]);
+
+  // Auto-enable earthquakes layer when focusing from sidebar
+  useEffect(() => {
+    if (focusedEarthquake) {
+        setLightningLayerOn(false);
+        setEarthquakesLayerOn(true);
+      }
+  }, [focusedEarthquake]);
+
+  // Center map on focused earthquake (from "Find on map" in Earthquakes panel)
+  useEffect(() => {
+    if (!focusedEarthquake || !mapRef.current) return;
+    const latNum = Number(focusedEarthquake.lat);
+    const lonNum = Number(focusedEarthquake.lon);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return;
+    const map = mapRef.current;
+    map.setView(L.latLng(latNum, lonNum), Math.max(map.getZoom(), 6), { animate: true });
+    map.panBy([0, -60], { animate: true });
+  }, [focusedEarthquake, mapReady]);
 
   // Center and highlight a focused repeater (from sidebar focus button)
   useEffect(() => {
@@ -885,6 +1300,52 @@ export default function MapPanel({
     return () => { clearTimeout(t0); clearTimeout(t1); };
   }, [focusedXotaItem, xotaLayerOn, mapReady]);
 
+  // Auto-enable aircraft layer when focusing an aircraft from sidebar
+  useEffect(() => {
+    if (focusedAircraft) {
+        setLightningLayerOn(false);
+        setAircraftLayerOn(true);
+      }
+  }, [focusedAircraft]);
+
+  // Center map on focused aircraft (from "Find on map" button in Aircraft panel)
+  useEffect(() => {
+    if (!focusedAircraft || !mapRef.current) return;
+    const latNum = Number(focusedAircraft.lat);
+    const lonNum = Number(focusedAircraft.lon);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return;
+
+    const map = mapRef.current;
+    const target = L.latLng(latNum, lonNum);
+    const zoom = Math.max(map.getZoom(), 10);
+
+    const reCenter = () => map.setView(target, zoom, { animate: false });
+
+    const highlightMarker = () => {
+      const layer = aircraftLayerRef.current;
+      if (!layer || typeof layer.eachLayer !== "function") return;
+      layer.eachLayer((marker) => {
+        if (!marker || !marker.getLatLng || !marker.setStyle) return;
+        const p = marker.getLatLng();
+        const isMatch = Math.abs(p.lat - latNum) < 0.0001 && Math.abs(p.lng - lonNum) < 0.0001;
+        if (isMatch) {
+          marker.setStyle({ radius: 12, weight: 4, fillOpacity: 1 });
+          if (marker.openPopup) marker.openPopup();
+          if (marker.bringToFront) marker.bringToFront();
+        } else {
+          marker.setStyle({ radius: 6, weight: 2 });
+        }
+      });
+      setTimeout(reCenter, 100);
+    };
+
+    map.setView(target, zoom, { animate: true });
+    map.panBy([0, -80], { animate: true });
+    const t0 = setTimeout(highlightMarker, 100);
+    const t1 = setTimeout(highlightMarker, 2000);
+    return () => { clearTimeout(t0); clearTimeout(t1); };
+  }, [focusedAircraft, mapReady]);
+
   useEffect(() => {
     if (mapRef.current) return;
     const el = elRef.current;
@@ -961,6 +1422,24 @@ export default function MapPanel({
     } catch {}
     aprsLayerRef.current = L.layerGroup();
     if (aprsLayerVisible) map.addLayer(aprsLayerRef.current);
+    let aircraftLayerVisible = false;
+    try {
+      aircraftLayerVisible = localStorage.getItem(AIRCRAFT_LAYER_KEY) === "true";
+    } catch {}
+    aircraftLayerRef.current = L.layerGroup();
+    aircraftTrackLayerRef.current = L.layerGroup();
+    if (aircraftLayerVisible) {
+      map.addLayer(aircraftLayerRef.current);
+      map.addLayer(aircraftTrackLayerRef.current);
+    }
+    let earthquakesLayerVisible = false;
+    try {
+      earthquakesLayerVisible = localStorage.getItem(EARTHQUAKES_LAYER_KEY) === "true";
+    } catch {}
+    earthquakeLayerRef.current = L.layerGroup();
+    if (earthquakesLayerVisible) {
+      map.addLayer(earthquakeLayerRef.current);
+    }
     gridLayerRef.current = L.layerGroup().addTo(map);
     pskLayerRef.current = L.layerGroup().addTo(map);
 
@@ -997,6 +1476,7 @@ export default function MapPanel({
           marker.bindPopup(
             `<div class="map-popup-content"><b>${escapeHtml(b.call)}</b> · ${escapeHtml(b.grid || "")}<br/>${escapeHtml(b.location || "")}<br/>${escapeHtml(freqs)} MHz</div>`
           );
+          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(b.call)}</strong><br/>${escapeHtml(b.grid || "")}<br/>${escapeHtml(freqs)} MHz</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
         });
       })
       .catch((err) => console.warn("Failed to load beacons:", err));
@@ -1042,7 +1522,8 @@ export default function MapPanel({
       marker.openPopup();
       pathTargetMarkerRef.current = marker;
       if (setPathTargetActiveRef.current) setPathTargetActiveRef.current(true);
-      fetch(`/api/propagation/path?toLat=${encodeURIComponent(lat)}&toLon=${encodeURIComponent(lon)}`)
+      const h = Number.isFinite(antennaHeightRef.current) && antennaHeightRef.current >= 0 ? antennaHeightRef.current : 11;
+      fetch(`/api/propagation/path?toLat=${encodeURIComponent(lat)}&toLon=${encodeURIComponent(lon)}&antennaHeight=${encodeURIComponent(h)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
         .then((data) => {
           marker.setPopupContent(pathForecastPopupHtml(data, lat, lon));
@@ -1389,6 +1870,8 @@ export default function MapPanel({
           });
           const marker = L.marker([lat, lon], { icon }).addTo(layer);
           marker.bindPopup(popupHtml(s));
+          const spotTt = `<div class="map-marker-tooltip"><strong>${escapeHtml(s.dx)}</strong><br/>${escapeHtml(String(s.freq))} MHz · ${escapeHtml(s.mode || "—")} · ${escapeHtml(s.src || "")}<br/>via ${escapeHtml(s.spotter || "—")}${typeof s.distKm === "number" ? ` · ${s.distKm} km` : ""}</div>`;
+          marker.bindTooltip(spotTt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -16] });
         });
       } catch (err) {
         console.warn("Failed to refresh spots:", err);
@@ -1580,12 +2063,7 @@ export default function MapPanel({
     }
 
     let cancelled = false;
-    const h = (() => {
-      try {
-        const v = parseFloat(localStorage.getItem("hamshack_horizon_height"));
-        return Number.isFinite(v) && v >= 0 ? v : 11;
-      } catch { return 11; }
-    })();
+    const h = Number.isFinite(antennaHeight) && antennaHeight >= 0 ? antennaHeight : 11;
     fetch(`/api/horizon/terrain?h=${encodeURIComponent(h)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((geo) => {
@@ -1611,7 +2089,7 @@ export default function MapPanel({
       }
       horizonLayerRef.current = null;
     };
-  }, [horizonLayerOn, radioHorizon, mapReady]);
+  }, [horizonLayerOn, radioHorizon, mapReady, antennaHeight]);
 
   // QTH marker (house icon) at configured coordinates – updates when radioHorizon/config changes
   useEffect(() => {
@@ -1707,6 +2185,7 @@ export default function MapPanel({
           marker.bindPopup(
             `<div class="map-popup-content"><b>${escapeHtml(label)}</b><br/>${escapeHtml(rep.mode || "")} · ${escapeHtml(rep.band || "")}</div>`
           );
+          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(label)}</strong><br/>${escapeHtml(rep.mode || "")} · ${escapeHtml(rep.band || "")}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
         });
       } catch (err) {
         console.warn("PSK layer:", err);
@@ -1836,7 +2315,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setSpotsLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setSpotsLayerOn)}
               aria-label={spotsLayerOn ? "Hide DX Cluster / RBN layer" : "Show DX Cluster / RBN layer"}
               title={spotsLayerOn ? "DX Cluster / RBN layer on – click to hide" : "DX Cluster / RBN layer off – click to show"}
               style={{
@@ -1854,7 +2333,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setDxpeditionsLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setDxpeditionsLayerOn)}
               aria-label={dxpeditionsLayerOn ? "Hide DXpeditions layer" : "Show DXpeditions layer"}
               title={dxpeditionsLayerOn ? "DXpeditions on – click to hide" : "DXpeditions off – click to show"}
               style={{
@@ -1872,7 +2351,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setXotaLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setXotaLayerOn)}
               aria-label={xotaLayerOn ? "Hide xOTA layer" : "Show xOTA layer"}
               title={xotaLayerOn ? "xOTA (POTA/SOTA/IOTA/COTA) layer on – click to hide" : "xOTA layer off – click to show activators on map"}
               style={{
@@ -1890,7 +2369,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setBeaconsLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setBeaconsLayerOn)}
               aria-label={beaconsLayerOn ? "Hide beacons" : "Show beacons"}
               title={beaconsLayerOn ? "NCDXF beacons layer on – click to hide" : "NCDXF beacons layer off – click to show"}
               style={{
@@ -1908,7 +2387,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setSatellitesLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setSatellitesLayerOn)}
               aria-label={satellitesLayerOn ? "Hide satellites" : "Show satellites"}
               title={satellitesLayerOn ? "ISS and amateur satellites layer on – click to hide" : "Satellites layer off – click to show"}
               style={{
@@ -1926,7 +2405,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setRepeatersLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setRepeatersLayerOn)}
               aria-label={repeatersLayerOn ? "Hide Repeater layer" : "Show Repeater layer"}
               title={repeatersLayerOn ? "German repeaters layer on – click to hide" : "Repeaters layer off – click to show"}
               style={{
@@ -1944,7 +2423,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setAprsLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setAprsLayerOn)}
               aria-label={aprsLayerOn ? "Hide APRS layer" : "Show APRS layer"}
               title={aprsLayerOn ? "APRS layer on" : "APRS layer off – tracked stations from aprs.fi"}
               style={{
@@ -1962,7 +2441,61 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={() => setHorizonLayerOn((on) => !on)}
+              onClick={handleOtherLayerToggle(setAircraftLayerOn)}
+              aria-label={aircraftLayerOn ? "Hide aircraft layer" : "Show aircraft layer"}
+              title={aircraftLayerOn ? `Aircraft layer on – OpenSky, ${aircraftRadiusKm} km around QTH` : "Aircraft layer off – click to show ADS-B aircraft"}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 6,
+                border: "1px solid " + (aircraftLayerOn ? "rgba(245,159,0,0.8)" : "rgba(255,255,255,0.2)"),
+                background: aircraftLayerOn ? "rgba(245,159,0,0.35)" : "rgba(255,255,255,0.08)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: aircraftLayerOn ? 700 : 400
+              }}
+            >
+              {aircraftLayerOn ? "Aircraft ON" : "Aircraft OFF"}
+            </button>
+            <button
+              type="button"
+              onClick={handleOtherLayerToggle(setEarthquakesLayerOn)}
+              aria-label={earthquakesLayerOn ? "Hide earthquakes layer" : "Show earthquakes layer"}
+              title={earthquakesLayerOn ? "Earthquakes layer on – USGS" : "Earthquakes layer off – click to show USGS earthquakes"}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 6,
+                border: "1px solid " + (earthquakesLayerOn ? "rgba(220,53,69,0.8)" : "rgba(255,255,255,0.2)"),
+                background: earthquakesLayerOn ? "rgba(220,53,69,0.35)" : "rgba(255,255,255,0.08)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: earthquakesLayerOn ? 700 : 400
+              }}
+            >
+              {earthquakesLayerOn ? "Quakes ON" : "Quakes OFF"}
+            </button>
+            <button
+              type="button"
+              onClick={handleLightningToggle}
+              aria-label={lightningLayerOn ? "Hide lightning layer" : "Show lightning layer"}
+              title={lightningLayerOn ? "Lightning map on – Blitzortung overlay" : "Lightning layer off – click to show Blitzortung map"}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 6,
+                border: "1px solid " + (lightningLayerOn ? "rgba(255,212,59,0.8)" : "rgba(255,255,255,0.2)"),
+                background: lightningLayerOn ? "rgba(255,212,59,0.35)" : "rgba(255,255,255,0.08)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: lightningLayerOn ? 700 : 400
+              }}
+            >
+              {lightningLayerOn ? "Lightning ON" : "Lightning OFF"}
+            </button>
+            <button
+              type="button"
+              onClick={handleOtherLayerToggle(setHorizonLayerOn)}
               aria-label={horizonLayerOn ? "Hide Range layer" : "Show Range layer"}
               title={horizonLayerOn ? "Radio horizon and terrain layer on – click to hide" : "Range layer off – click to show circles and terrain polygon"}
               style={{
@@ -2028,7 +2561,27 @@ export default function MapPanel({
       </div>
       </div>
 
-      <div ref={mapWrapperRef} className="map-wrapper" style={{ flex: 1, minHeight: 0 }}>
+      <div ref={mapWrapperRef} className="map-wrapper" style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        {lightningLayerOn && (
+          <div
+            className="lightning-iframe-overlay"
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 600,
+              borderRadius: "0 0 14px 14px",
+              overflow: "hidden",
+              background: "var(--bg)"
+            }}
+            aria-label="Blitzortung lightning map overlay"
+          >
+            <iframe
+              src="https://map.blitzortung.org/index.php?interactive=1&NavigationControl=1&FullScreenControl=1&Cookies=0&InfoDiv=1&MapStyle=2&LightningChecked=1&LightningRange=3&Advertisment=0"
+              title="Blitzortung live lightning map"
+              style={{ width: "100%", height: "100%", border: "none" }}
+            />
+          </div>
+        )}
         <div
           ref={elRef}
           className="map-container"
@@ -2036,7 +2589,7 @@ export default function MapPanel({
           aria-label="Map"
           title="Click map for path forecast. Layers: Calls, DXped, xOTA, Beacons, Sats, Repeaters, Range."
         >
-      {(spotsLayerOn || dxpeditionsLayerOn || xotaLayerOn || satellitesLayerOn || repeatersLayerOn || aprsLayerOn || horizonLayerOn) && (
+      {(spotsLayerOn || dxpeditionsLayerOn || xotaLayerOn || satellitesLayerOn || repeatersLayerOn || aprsLayerOn || aircraftLayerOn || earthquakesLayerOn || lightningLayerOn || horizonLayerOn) && (
         <>
           <div className="map-legend">
             {spotsLayerOn && (
@@ -2112,6 +2665,56 @@ export default function MapPanel({
                   <span className="map-legend-item">
                     <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#20c997", borderColor: "#20c997" }} />
                     <span className="map-legend-label">Tracked stations</span>
+                  </span>
+                </div>
+              </div>
+            )}
+            {aircraftLayerOn && (
+              <div className="map-legend-box" style={{ border: "2px solid rgba(245,159,0,0.5)" }}>
+                <div className="map-legend-title">Aircraft</div>
+                <div className="map-legend-row">
+                  <span className="map-legend-item">
+                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#f59f00", borderColor: "#f59f00" }} />
+                    <span className="map-legend-label">Within {aircraftRadiusKm} km (OpenSky)</span>
+                  </span>
+                </div>
+                <div className="map-legend-row">
+                  <span className="map-legend-item">
+                    <span style={{ display: "inline-block", width: 16, height: 2, background: "#f59f00", borderRadius: 1, opacity: 0.9, flexShrink: 0 }} />
+                    <span className="map-legend-label">Route (click in popup)</span>
+                  </span>
+                </div>
+              </div>
+            )}
+            {lightningLayerOn && (
+              <div className="map-legend-box" style={{ border: "2px solid rgba(255,212,59,0.5)" }}>
+                <div className="map-legend-title">Lightning</div>
+                <div className="map-legend-row">
+                  <span className="map-legend-item">
+                    <span className="map-legend-label">Blitzortung.org overlay</span>
+                  </span>
+                </div>
+              </div>
+            )}
+            {earthquakesLayerOn && (
+              <div className="map-legend-box" style={{ border: "2px solid rgba(220,53,69,0.5)" }}>
+                <div className="map-legend-title">Earthquakes</div>
+                <div className="map-legend-row">
+                  <span className="map-legend-item">
+                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#51cf66", borderColor: "#51cf66" }} />
+                    <span className="map-legend-label">M &lt; 4</span>
+                  </span>
+                  <span className="map-legend-item">
+                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#f59f00", borderColor: "#f59f00" }} />
+                    <span className="map-legend-label">M 4–5</span>
+                  </span>
+                  <span className="map-legend-item">
+                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#e67700", borderColor: "#e67700" }} />
+                    <span className="map-legend-label">M 5–6</span>
+                  </span>
+                  <span className="map-legend-item">
+                    <span className="map-legend-dot map-legend-dot--circle" style={{ background: "#c92a2a", borderColor: "#c92a2a" }} />
+                    <span className="map-legend-label">M 6+</span>
                   </span>
                 </div>
               </div>

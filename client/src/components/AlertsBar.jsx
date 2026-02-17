@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export default function AlertsBar() {
   const [alerts, setAlerts] = useState([]);
   const [wantedDx, setWantedDx] = useState([]);
+  const [civilProtection, setCivilProtection] = useState([]);
   const [err, setErr] = useState(null);
 
   useEffect(() => {
@@ -14,6 +15,7 @@ export default function AlertsBar() {
           if (!cancelled) {
             setAlerts(data.alerts || []);
             setWantedDx(data.wantedDx || []);
+            setCivilProtection(data.civilProtection || []);
           }
         })
         .catch((e) => { if (!cancelled) setErr(String(e)); });
@@ -46,12 +48,41 @@ export default function AlertsBar() {
     );
   }
 
-  const hasSpaceAlerts = alerts.length > 0;
+  const spaceAlerts = alerts.filter((a) => a.type !== "militaryAircraft");
+  const militaryAlerts = alerts.filter((a) => a.type === "militaryAircraft");
+  const hasSpaceAlerts = spaceAlerts.length > 0;
   const hasWantedDx = wantedDx.length > 0;
-  if (!hasSpaceAlerts && !hasWantedDx) return null;
+  const hasMilitaryAlerts = militaryAlerts.length > 0;
+  const hasCivilProtection = civilProtection.length > 0;
+  if (!hasSpaceAlerts && !hasWantedDx && !hasMilitaryAlerts && !hasCivilProtection) return null;
 
   return (
     <>
+      {hasMilitaryAlerts && (
+        <div
+          className="alerts-bar alerts-bar-military"
+          role="alert"
+          aria-live="polite"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: "8px 16px",
+            padding: "6px 12px",
+            background: "rgba(245,159,0,0.15)",
+            borderBottom: "1px solid rgba(245,159,0,0.4)",
+            fontSize: 13,
+            color: "rgba(255,255,255,0.95)"
+          }}
+        >
+          <span style={{ fontWeight: 700, color: "#f59f00" }}>✈ Military aircraft in radius</span>
+          {militaryAlerts.map((a, i) => (
+            <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              {a.message}
+            </span>
+          ))}
+        </div>
+      )}
       {hasSpaceAlerts && (
         <div
           className="alerts-bar"
@@ -69,11 +100,48 @@ export default function AlertsBar() {
           }}
         >
           <span style={{ fontWeight: 700, color: "#f03e3e" }}>⚠ Alerts</span>
-          {alerts.map((a, i) => (
+          {spaceAlerts.map((a, i) => (
             <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
               {a.message}
             </span>
           ))}
+        </div>
+      )}
+      {hasCivilProtection && (
+        <div
+          className="alerts-bar alerts-bar-civil"
+          role="alert"
+          aria-live="polite"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: "8px 16px",
+            padding: "6px 12px",
+            background: "rgba(220,53,69,0.15)",
+            borderBottom: "1px solid rgba(220,53,69,0.4)",
+            fontSize: 13,
+            color: "rgba(255,255,255,0.95)"
+          }}
+        >
+          <span style={{ fontWeight: 700, color: "#dc3545" }}>⚠ Katastrophenschutz</span>
+          {civilProtection.slice(0, 4).map((w, i) => (
+            <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              {w.url ? (
+                <a href={w.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "underline" }}>
+                  [{w.source}] {w.title}
+                </a>
+              ) : (
+                <span>[{w.source}] {w.title}</span>
+              )}
+            </span>
+          ))}
+          {civilProtection.length > 4 && (
+            <span style={{ color: "rgba(255,255,255,0.6)" }}>+{civilProtection.length - 4} more</span>
+          )}
+          <a href="https://warnung.bund.de" target="_blank" rel="noopener noreferrer" style={{ color: "rgba(255,255,255,0.9)", fontSize: 11, marginLeft: "auto" }}>
+            warnung.bund.de ↗
+          </a>
         </div>
       )}
       {hasWantedDx && (

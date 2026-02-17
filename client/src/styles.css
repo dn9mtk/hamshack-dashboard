@@ -277,6 +277,14 @@
     margin: 0 0 10px 0;
     line-height: 1.4;
   }
+  .panel-section-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 6px 0;
+  }
   .panel-intro-link {
     color: rgba(255,212,59,0.9);
     text-decoration: none;
@@ -284,6 +292,29 @@
   .panel-intro-link:hover {
     text-decoration: underline;
   }
+
+  /* Ampel (traffic light) scale – UV index, air quality */
+  .ampel-scale {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    height: 20px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--line);
+  }
+  .ampel-segment {
+    flex: 1;
+    min-width: 0;
+    border-radius: 0;
+    opacity: 0.4;
+    transition: opacity 0.2s ease;
+  }
+  .ampel-segment--active { opacity: 1; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5); }
+  .ampel-scale-wrap { display: flex; flex-direction: column; gap: 6px; }
+  .ampel-scale-wrap .ampel-label { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; align-items: baseline; }
+  .ampel-value-badge { font-size: 18px; font-weight: 800; letter-spacing: 0.05em; }
+  .ampel-status { font-size: 12px; font-weight: 700; }
 
   /* Responsive: narrow viewport – single column, sidebar above map, map keeps min height */
   @media (max-width: 1024px) {
@@ -365,6 +396,83 @@
   .modal-dialog .btn-primary:hover { background: #74c0fc; }
   .modal-dialog .btn-secondary { padding: 8px 16px; background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); cursor: pointer; font-size: 13px; }
   .modal-dialog .btn-secondary:hover { color: var(--text); }
+
+  /* Settings modal – tabs, compact layout, no scroll */
+  .settings-dialog {
+    max-width: 400px;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .settings-header { flex-shrink: 0; margin-bottom: 10px; }
+  .settings-header h3 { margin: 0 0 8px 0; font-size: 16px; }
+  .settings-tabs {
+    display: flex;
+    gap: 4px;
+  }
+  .settings-tabs .contests-toggle-btn {
+    flex: 1;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .settings-form {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+  }
+  .settings-panels { min-height: 0; overflow: hidden; flex: 1; }
+  .settings-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 2px 0;
+  }
+  .settings-panel .settings-hint {
+    font-size: 11px;
+    color: var(--muted);
+    margin: 0 0 10px 0;
+    line-height: 1.35;
+  }
+  .settings-field {
+    margin-bottom: 8px;
+  }
+  .settings-field label {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .settings-field input,
+  .settings-panel input {
+    width: 100%;
+    padding: 6px 10px;
+    margin: 0;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .settings-field input:focus,
+  .settings-panel input:focus {
+    outline: none;
+    border-color: rgba(255,255,255,0.3);
+  }
+  .settings-input-readonly {
+    opacity: 0.85;
+    cursor: default;
+  }
+  .settings-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .settings-row .settings-field { margin-bottom: 8px; }
+  .settings-loading { color: var(--muted); font-size: 13px; margin: 20px 0; }
+  .settings-err { color: #ffb4b4; font-size: 12px; margin: 0 0 8px 0; }
+  .settings-dialog .modal-actions { flex-shrink: 0; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
 
   /* Help overlay – glossary & shortcuts (no scroll, panel layout) */
   .help-overlay-dialog {
@@ -918,7 +1026,8 @@
     background: var(--bg);
     color: var(--text);
   }
-  .repeaters-search-input {
+  .repeaters-search-input,
+  .aircraft-radius-input {
     font-size: 12px;
     padding: 5px 8px;
     min-width: 0;
@@ -928,8 +1037,28 @@
     color: var(--text);
     outline: none;
   }
+  .aircraft-radius-input {
+    width: 56px;
+    text-align: right;
+  }
+  .aircraft-radius-input:focus-visible,
+  .repeaters-search-input:focus-visible {
+    border-color: rgba(77,171,247,0.5);
+    box-shadow: 0 0 0 2px rgba(77,171,247,0.2);
+  }
   .repeaters-search-input::placeholder {
     color: rgba(255,255,255,0.6);
+  }
+  /* Aircraft panel: scrollable flight list */
+  .aircraft-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .aircraft-list-card {
+    flex-shrink: 0;
   }
   .repeaters-coverage-dot {
     width: 8px;
@@ -1674,6 +1803,34 @@
   }
   .map-container .leaflet-popup-close-button:hover {
     color: #fff !important;
+  }
+
+  /* Map marker hover tooltips */
+  .map-container .leaflet-tooltip.map-marker-tooltip-wrap {
+    background: rgba(12, 25, 45, 0.96);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: rgba(255,255,255,0.92);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  }
+  .map-container .leaflet-tooltip.map-marker-tooltip-wrap::before {
+    border-top-color: rgba(12, 25, 45, 0.96);
+  }
+  .map-marker-tooltip strong {
+    color: #fff;
+    font-weight: 600;
+  }
+  .map-marker-tooltip br + strong,
+  .map-marker-tooltip br + span {
+    font-weight: 400;
+    color: rgba(255,255,255,0.85);
+  }
+  .map-marker-tooltip-sub {
+    color: rgba(255,255,255,0.75);
+    font-size: 11px;
   }
 
   /* DXpedition popup – wie Referenz: Zeile 1 Call • NOW, Zeile 2 Entity, Zeile 3 Datum */

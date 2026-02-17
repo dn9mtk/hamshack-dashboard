@@ -104,12 +104,122 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId", "lat", "lon", "elevation", "wantedPrefixes"];
+const CONFIG_KEYS = ["callsign", "locator", "qthName", "pwsStationId", "lat", "lon", "elevation", "antennaHeight", "wantedPrefixes", "ninaArs", "ninaAreaFilter"];
+
+/** Lookup NINA ARS and Ortsfilter from coordinates (Nominatim + OpenPLZ). Returns { ninaArs, ninaAreaFilter } or null. */
+async function lookupNinaFromCoords(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  try {
+    const nom = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&addressdetails=1&zoom=10`,
+      { headers: { "User-Agent": "HamshackDashboard/1.0" } }
+    );
+    if (!nom.ok) return null;
+    const addr = await nom.json();
+    const cc = addr?.address?.country_code;
+    if (cc !== "de") return null;
+    const parts = addr?.address || {};
+    const county = parts.county || parts.district;
+    const city = parts.city || parts.town || parts.village || parts.municipality;
+    const municipality = parts.municipality;
+    let ninaAreaFilter = "";
+    const terms = [county, city, municipality].filter(Boolean);
+    const seen = new Set();
+    ninaAreaFilter = terms.filter((t) => {
+      const k = t.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).join(", ");
+    let ninaArs = "";
+    const stateKey = (() => {
+      const iso = (parts["ISO3166-2-lvl4"] || "").toUpperCase().replace(/^DE-/, "");
+      const isoMap = { HE: "06", BW: "08", BY: "09", BE: "11", BB: "12", HB: "04", HH: "02", MV: "13", NI: "03", NW: "05", RP: "07", SL: "10", SN: "14", ST: "15", SH: "01", TH: "16" };
+      if (iso && isoMap[iso]) return isoMap[iso];
+      const m = { hessen: "06", hesse: "06", "baden-württemberg": "08", "baden-wuerttemberg": "08", bayern: "09", bavaria: "09", berlin: "11", brandenburg: "12", bremen: "04", hamburg: "02", "mecklenburg-vorpommern": "13", niedersachsen: "03", "nordrhein-westfalen": "05", "rheinland-pfalz": "07", saarland: "10", sachsen: "14", "sachsen-anhalt": "15", "schleswig-holstein": "01", thüringen: "16", thueringen: "16" };
+      const s = (parts.state || "").toLowerCase().replace(/\s*\([^)]*\)/g, "").trim();
+      return m[s] || null;
+    })();
+    const tryLocalities = async (searchName, postcode) => {
+      const plzUrl = postcode
+        ? `https://openplzapi.org/de/Localities?name=${encodeURIComponent(searchName)}&postalCode=${encodeURIComponent(postcode)}`
+        : `https://openplzapi.org/de/Localities?name=${encodeURIComponent(searchName)}`;
+      const plz = await fetch(plzUrl, { headers: { "User-Agent": "HamshackDashboard/1.0" } });
+      if (!plz.ok) return null;
+      const localities = await plz.json();
+      const first = Array.isArray(localities) ? localities[0] : null;
+      return first?.district?.key;
+    };
+    if (city || county) {
+      const postcode = parts.postcode || "";
+      const baseName = (city || county).trim();
+      const searchNames = [baseName];
+      if (baseName.includes(" im ")) searchNames.push(baseName.replace(/\s+im\s+.*$/i, "").trim());
+      if (baseName.includes(" am ")) searchNames.push(baseName.replace(/\s+am\s+.*$/i, "").trim());
+      for (const searchName of searchNames) {
+        if (!searchName) continue;
+        const districtKey = await tryLocalities(searchName, postcode);
+        if (districtKey && /^\d{5}$/.test(districtKey)) {
+          ninaArs = String(districtKey).padEnd(12, "0").slice(0, 12);
+          break;
+        }
+      }
+      if (!ninaArs && county && stateKey) {
+        const distUrl = `https://openplzapi.org/de/FederalStates/${stateKey}/Districts`;
+        const dr = await fetch(distUrl, { headers: { "User-Agent": "HamshackDashboard/1.0" } });
+        if (dr.ok) {
+          const districts = await dr.json();
+          const countyNorm = county.toLowerCase().replace(/-/g, " ").trim();
+          const found = Array.isArray(districts) ? districts.find((d) =>
+            (d.name || "").toLowerCase().replace(/-/g, " ").includes(countyNorm) ||
+            countyNorm.includes((d.name || "").toLowerCase().replace(/-/g, " "))
+          ) : null;
+          if (found?.key && /^\d{5}$/.test(found.key)) {
+            ninaArs = String(found.key).padEnd(12, "0").slice(0, 12);
+          }
+        }
+      }
+    }
+    return { ninaArs, ninaAreaFilter };
+  } catch {
+    return null;
+  }
+}
+
+app.get("/api/nina-lookup", async (req, res) => {
+  try {
+    let lat = Number(req.query.lat);
+    let lon = Number(req.query.lon);
+    const locator = String(req.query.locator || "").trim().toUpperCase();
+    if ((!Number.isFinite(lat) || !Number.isFinite(lon)) && locator) {
+      const p = locatorToLatLon(locator);
+      if (p) { lat = p.lat; lon = p.lon; }
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return res.status(400).json({ error: "lat/lon or locator required" });
+    }
+    const result = await lookupNinaFromCoords(lat, lon);
+    res.json(result || { ninaArs: "", ninaAreaFilter: "" });
+  } catch (e) {
+    res.status(500).json({ error: "lookup_failed", ninaArs: "", ninaAreaFilter: "" });
+  }
+});
+
 app.post("/api/config", async (req, res) => {
   try {
     const body = req.body || {};
     const updates = {};
     for (const k of CONFIG_KEYS) if (body[k] !== undefined) updates[k] = body[k];
+    if (updates.ninaArs != null) updates.ninaArs = String(updates.ninaArs).replace(/\D/g, "").slice(0, 12) || "";
+    if (updates.ninaAreaFilter != null) updates.ninaAreaFilter = String(updates.ninaAreaFilter || "").trim() || "";
+    if (updates.antennaHeight !== undefined) {
+      const raw = updates.antennaHeight;
+      if (raw === null || raw === "") updates.antennaHeight = null;
+      else {
+        const v = Number(raw);
+        updates.antennaHeight = Number.isFinite(v) && v >= 0 ? Math.round(v * 10) / 10 : null;
+      }
+    }
     let lat = updates.lat != null && updates.lat !== "" ? Number(updates.lat) : NaN;
     let lon = updates.lon != null && updates.lon !== "" ? Number(updates.lon) : NaN;
     if (!Number.isFinite(lat)) lat = body.lat != null && body.lat !== "" ? Number(body.lat) : NaN;
@@ -132,6 +242,16 @@ app.post("/api/config", async (req, res) => {
         }
       } catch {
         /* keep existing elevation */
+      }
+      // NINA ARS and Ortsfilter from QTH (Nominatim + OpenPLZ), only when empty
+      const ninaArsEmpty = (updates.ninaArs ?? CONFIG.ninaArs ?? "") === "";
+      const ninaAreaEmpty = (updates.ninaAreaFilter ?? CONFIG.ninaAreaFilter ?? "") === "";
+      if (ninaArsEmpty || ninaAreaEmpty) {
+        const nina = await lookupNinaFromCoords(lat, lon);
+        if (nina) {
+          if (ninaArsEmpty && nina.ninaArs) updates.ninaArs = nina.ninaArs;
+          if (ninaAreaEmpty && nina.ninaAreaFilter) updates.ninaAreaFilter = nina.ninaAreaFilter;
+        }
       }
     }
     CONFIG = { ...CONFIG, ...updates };
@@ -433,6 +553,90 @@ function getQth() {
     }
   }
   return locatorToLatLon(CONFIG.locator);
+}
+
+/** Point-in-polygon (ray casting). Ring is array of [lon, lat] (GeoJSON order). */
+function pointInPolygon(lon, lat, ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return false;
+  let inside = false;
+  const n = ring.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+/** Check if point (lon, lat) is inside any polygon of GeoJSON FeatureCollection. */
+function pointInGeoJson(lon, lat, geojson) {
+  const features = geojson?.features || [];
+  for (const f of features) {
+    const geom = f.geometry;
+    if (!geom) continue;
+    if (geom.type === "Polygon") {
+      const ring = geom.coordinates?.[0];
+      if (ring && pointInPolygon(lon, lat, ring)) return true;
+    } else if (geom.type === "MultiPolygon") {
+      for (const polygon of geom.coordinates || []) {
+        const ring = polygon?.[0];
+        if (ring && pointInPolygon(lon, lat, ring)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** OpenSky aircraft metadata cache (icao24 -> { data, expires }) */
+const AIRCRAFT_METADATA_CACHE = new Map();
+const METADATA_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function fetchAircraftMetadata(icao24) {
+  if (!icao24 || typeof icao24 !== "string") return null;
+  const key = icao24.toLowerCase().trim();
+  const hit = AIRCRAFT_METADATA_CACHE.get(key);
+  if (hit && Date.now() < hit.expires) return hit.data;
+  try {
+    const url = `https://opensky-network.org/api/metadata/aircraft/icao/${encodeURIComponent(key)}`;
+    const resp = await fetch(url, {
+      headers: { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" }
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    AIRCRAFT_METADATA_CACHE.set(key, { data, expires: Date.now() + METADATA_TTL_MS });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/** Military aircraft callsign prefixes (USAF, NATO, RAF, GAF, etc.) */
+const MILITARY_CALLSIGN_PREFIXES = [
+  "RCH", "REACH", "GAF", "NAVY", "ARMY", "DUKE", "RRR", "NATO", "CNV", "EVAC", "SPAR",
+  "HAMMER", "EAGLE", "TIGER", "VADER", "SLAYER", "VIPER", "HAWK", "BOLT", "JEEP",
+  "COBRA", "RAVEN", "GHOST", "WOLF", "JEDI", "SNAKE", "KING", "QUEEN",
+  "SAM", "JACK", "ROMEO", "SWAT", "TITAN", "SPECT", "BONE", "BLUE", "GOLD",
+  "JADE", "RAGE", "DEMON", "BANSHEE", "MACE", "AXE", "BLADE", "SPIKE"
+];
+
+function isMilitaryCallsign(callsign) {
+  if (!callsign || typeof callsign !== "string") return false;
+  const c = callsign.trim().toUpperCase();
+  return MILITARY_CALLSIGN_PREFIXES.some((p) => c.startsWith(p));
+}
+
+/** Bounding box (lamin, lamax, lomin, lomax) for OpenSky API from center + radius km */
+function bboxFromCenterRadius(lat, lon, radiusKm) {
+  const kmPerDegLat = 111.32;
+  const kmPerDegLon = 111.32 * Math.cos((lat * Math.PI) / 180);
+  const dLat = radiusKm / kmPerDegLat;
+  const dLon = radiusKm / Math.max(0.01, kmPerDegLon);
+  return {
+    lamin: Math.max(-90, lat - dLat),
+    lamax: Math.min(90, lat + dLat),
+    lomin: lon - dLon,
+    lomax: lon + dLon
+  };
 }
 
 // --------------------
@@ -1004,17 +1208,19 @@ app.get("/api/propagation/path", async (req, res) => {
 
     let lineOfSightClear = true;
     let obstructedAtKm = null;
+    const antH = Number(req.query.antennaHeight) ?? (Number.isFinite(CONFIG.antennaHeight) ? CONFIG.antennaHeight : 11);
     if (elevationProfile && elevationProfile.samples && elevationProfile.samples.length >= 2) {
       const samples = elevationProfile.samples;
       const distTotal = samples[samples.length - 1].distKm || 1;
       const elevStart = samples[0].elevation;
       const elevEnd = samples[samples.length - 1].elevation;
       const marginM = 15;
+      const obsHeight = elevStart + antH;
       for (let i = 1; i < samples.length - 1; i++) {
         const s = samples[i];
         const d = s.distKm;
         const terrainH = Number(s.elevation);
-        const losH = elevStart + (elevEnd - elevStart) * (d / distTotal) + marginM;
+        const losH = obsHeight + (elevEnd - obsHeight) * (d / distTotal) + marginM;
         if (Number.isFinite(terrainH) && terrainH > losH) {
           lineOfSightClear = false;
           if (obstructedAtKm == null) obstructedAtKm = Math.round(d * 10) / 10;
@@ -1085,7 +1291,7 @@ app.get("/api/horizon/terrain", async (req, res) => {
   try {
     const fromQ = getQth();
     if (!fromQ) return res.status(400).json({ error: "Invalid QTH locator", detail: "Set locator in config" });
-    const antennaHeightM = Number(req.query.h) || 11;
+    const antennaHeightM = Number(req.query.h) ?? (Number.isFinite(CONFIG.antennaHeight) ? CONFIG.antennaHeight : 11);
 
     const NUM_BEARINGS = 72;
     const STEP_KM = 2;
@@ -1856,6 +2062,83 @@ app.get("/api/alerts", async (req, res) => {
     });
     const list = Object.entries(data.alerts || {}).map(([type, message]) => ({ type, message }));
 
+    // Military aircraft in radius – cached 15s to limit OpenSky requests
+    try {
+      const radiusKm = 12;
+      const aircraft = await cached("military_aircraft", 15_000, () => getAircraftInRadius(radiusKm));
+      const military = aircraft.filter((a) => isMilitaryCallsign(a.callsign));
+      if (military.length > 0) {
+        const calls = military.slice(0, 5).map((a) => a.callsign || a.icao24 || "?").join(", ");
+        list.push({
+          type: "militaryAircraft",
+          message: `Military aircraft in ${radiusKm} km radius: ${calls}${military.length > 5 ? ` (+${military.length - 5} more)` : ""}`
+        });
+      }
+    } catch {}
+
+    // Civil protection warnings (NINA/Katwarn) – restricted to QTH via ARS + GeoJSON point-in-polygon
+    let civilProtection = [];
+    const ninaArs = String(CONFIG.ninaArs || "").replace(/\D/g, "");
+    const qth = getQth();
+    const hasCoords = qth && Number.isFinite(qth.lat) && Number.isFinite(qth.lon);
+    if (ninaArs.length >= 5) {
+      try {
+        const ars12 = ninaArs.padEnd(12, "0").slice(0, 12);
+        const cacheKey = hasCoords ? `civil_protection_${ars12}_${qth.lat.toFixed(4)}_${qth.lon.toFixed(4)}` : `civil_protection_${ars12}`;
+        const cp = await cached(cacheKey, 5 * 60 * 1000, async () => {
+          const raw = [];
+          const url = `https://warnung.bund.de/api31/dashboard/${ars12}.json`;
+          const r = await fetch(url, { headers: { "User-Agent": "HamshackDashboard/1.0" } });
+          if (!r.ok) return [];
+          const arr = await r.json();
+          if (!Array.isArray(arr)) return [];
+          const sevOrder = { Extreme: 0, Severe: 1, Moderate: 2, Minor: 3, Unknown: 4 };
+          for (const w of arr) {
+            const msgType = w.payload?.data?.msgType || w.payload?.type || w.type;
+            if (msgType === "Cancel" || msgType === "cancel") continue;
+            const title = (w.i18nTitle && (w.i18nTitle.de || w.i18nTitle.en)) || w.payload?.data?.headline || w.id || "—";
+            const severity = w.payload?.data?.severity || w.payload?.severity || w.severity || "Unknown";
+            raw.push({ id: w.id, source: "NINA", title: String(title).trim(), severity, url: w.id ? `https://warnung.bund.de/meldungen/${encodeURIComponent(w.id)}` : null });
+          }
+          // Deduplicate by title
+          const seen = new Set();
+          const deduped = raw.filter((w) => {
+            const key = w.title.replace(/\s+/g, " ").trim();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          // If QTH coords: fetch GeoJSON per warning, keep only those where point is inside polygon
+          let filtered = deduped;
+          if (hasCoords && deduped.length > 0) {
+            const base = "https://warnung.bund.de/api31";
+            const fetchGeoJson = async (id) => {
+              const hit = cache.get(`nina_geojson_${id}`);
+              if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.v;
+              try {
+                const rr = await fetch(`${base}/warnings/${encodeURIComponent(id)}.geojson`, { headers: { "User-Agent": "HamshackDashboard/1.0" } });
+                if (!rr.ok) return null;
+                const geojson = await rr.json();
+                cache.set(`nina_geojson_${id}`, { t: Date.now(), v: geojson });
+                return geojson;
+              } catch {
+                return null;
+              }
+            };
+            const results = await Promise.all(deduped.slice(0, 30).map((w) => fetchGeoJson(w.id)));
+            filtered = deduped.slice(0, 30).filter((w, i) => {
+              const geojson = results[i];
+              if (!geojson) return false;
+              return pointInGeoJson(qth.lon, qth.lat, geojson);
+            });
+          }
+          filtered.sort((a, b) => (sevOrder[a.severity] ?? 4) - (sevOrder[b.severity] ?? 4));
+          return filtered.slice(0, 5).map(({ id, ...rest }) => rest);
+        });
+        civilProtection = cp;
+      } catch {}
+    }
+
     // Wanted-DX: spots matching user-configured rare prefixes (no cache – spots change often)
     let wantedDx = [];
     const wantedRaw = (CONFIG.wantedPrefixes || "").trim();
@@ -1870,7 +2153,7 @@ app.get("/api/alerts", async (req, res) => {
       }
     }
 
-    res.json({ alerts: list, wantedDx, updated: new Date().toISOString() });
+    res.json({ alerts: list, wantedDx, civilProtection, updated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ error: "alerts_failed", detail: String(e) });
   }
@@ -2484,14 +2767,17 @@ app.get("/api/pskreporter", async (req, res) => {
   }
   if (!callsign) return res.status(400).json({ error: "callsign required" });
 
-  const limit = Math.min(100, Math.max(10, Number(req.query.limit) || 50));
-  const flowStartSeconds = Math.max(-86400, Number(req.query.hours) ? -Math.abs(Number(req.query.hours)) * 3600 : -7200);
+  const hoursReq = Number(req.query.hours) ? Math.min(168, Math.max(1, Math.abs(Number(req.query.hours)))) : 2;
+  const limit = hoursReq > 24 ? Math.min(400, 200) : Math.min(100, Math.max(10, Number(req.query.limit) || 50));
+  const flowStartSeconds = -hoursReq * 3600;
   const filter = (req.query.filter || "both").toLowerCase();
+  const modeFilter = (req.query.mode || "").trim().toUpperCase();
   const wantSent = filter === "sent" || filter === "both";
   const wantReceived = filter === "received" || filter === "both";
 
   async function fetchQuery(param, value) {
-    const url = `https://retrieve.pskreporter.info/query?${param}=${encodeURIComponent(value)}&rptlimit=${limit}&flowStartSeconds=${flowStartSeconds}`;
+    let url = `https://retrieve.pskreporter.info/query?${param}=${encodeURIComponent(value)}&rptlimit=${limit}&flowStartSeconds=${flowStartSeconds}`;
+    if (modeFilter) url += `&mode=${encodeURIComponent(modeFilter)}`;
     const r = await fetch(url, { headers: { "Accept": "application/xml" }, signal: AbortSignal.timeout(20000) });
     if (!r.ok) throw new Error(`Upstream returned ${r.status}`);
     const text = await r.text();
@@ -2510,7 +2796,7 @@ app.get("/api/pskreporter", async (req, res) => {
   }
 
   try {
-    const cacheKey = `pskreporter_${callsign}_${filter}_${flowStartSeconds}`;
+    const cacheKey = `pskreporter_${callsign}_${filter}_${flowStartSeconds}_${modeFilter}`;
     const merged = await cached(cacheKey, 120_000, async () => {
       const receptionReports = [];
       let upstreamFailed = false;
@@ -2551,19 +2837,29 @@ app.get("/api/pskreporter", async (req, res) => {
     }
 
     const withLatLon = list.map((r) => {
-      const loc = r.receiverLocator || r.senderLocator;
-      const p = loc ? locatorToLatLon(loc) : null;
-      return { ...r, lat: p?.lat, lon: p?.lon };
+      const senderP = r.senderLocator ? locatorToLatLon(r.senderLocator) : null;
+      const receiverP = r.receiverLocator ? locatorToLatLon(r.receiverLocator) : null;
+      const otherP = r.direction === "heard_you" ? receiverP : senderP;
+      return {
+        ...r,
+        lat: otherP?.lat,
+        lon: otherP?.lon,
+        senderLat: senderP?.lat,
+        senderLon: senderP?.lon,
+        receiverLat: receiverP?.lat,
+        receiverLon: receiverP?.lon
+      };
     });
 
     res.json({
       callsign,
       filter,
+      mode: modeFilter || null,
       updated: new Date().toISOString(),
       flowStartSeconds,
       reports: withLatLon,
       source: "https://retrieve.pskreporter.info/query",
-      note: filter === "both" ? "Where you were heard + what you heard. Cached 2 min." : (filter === "sent" ? "Where your signal was received." : "What your station received.")
+      note: (modeFilter ? `Mode ${modeFilter}. ` : "") + (filter === "both" ? "Where you were heard + what you heard. Cached 2 min." : (filter === "sent" ? "Where your signal was received." : "What your station received."))
     });
   } catch (e) {
     const msg = String(e?.message || e);
@@ -2844,6 +3140,497 @@ app.get("/api/aprs", async (req, res) => {
   } catch (e) {
     console.warn("APRS fetch failed:", e?.message || e);
     res.status(502).json({ error: "aprs_fetch_failed", detail: String(e), entries: [] });
+  }
+});
+
+/** OpenSky OAuth2: get access token (cached for reuse) */
+const OPENSKY_TOKEN_CACHE = { token: null, expires: 0 };
+async function getOpenSkyToken() {
+  const clientId = (process.env.OPENSKY_CLIENT_ID || "").trim();
+  const clientSecret = (process.env.OPENSKY_CLIENT_SECRET || "").trim();
+  if (!clientId || !clientSecret) return null;
+  const now = Date.now();
+  if (OPENSKY_TOKEN_CACHE.token && OPENSKY_TOKEN_CACHE.expires > now + 60_000) {
+    return OPENSKY_TOKEN_CACHE.token;
+  }
+  try {
+    const resp = await fetch("https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret
+      }).toString()
+    });
+    if (!resp.ok) throw new Error(`OAuth ${resp.status}`);
+    const data = await resp.json();
+    const token = data.access_token;
+    const expiresIn = (data.expires_in || 300) * 1000;
+    OPENSKY_TOKEN_CACHE.token = token;
+    OPENSKY_TOKEN_CACHE.expires = now + expiresIn;
+    return token;
+  } catch (e) {
+    console.warn("OpenSky OAuth failed:", e?.message || e);
+    return null;
+  }
+}
+
+/** Fetch aircraft in radius (basic list, no metadata) – for military alert. Cached 15s. */
+async function getAircraftInRadius(radiusKm = 12) {
+  const q = getQth();
+  if (!q) return [];
+  const bbox = bboxFromCenterRadius(q.lat, q.lon, radiusKm);
+  try {
+    const url = `https://opensky-network.org/api/states/all?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`;
+    const headers = { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" };
+    const token = await getOpenSkyToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const states = data.states || [];
+    return states
+      .filter((s) => s && s[6] != null && s[5] != null)
+      .map((s) => ({
+        icao24: s[0] || null,
+        callsign: (s[1] || "").trim() || null,
+        origin_country: s[2] || null,
+        latitude: Number(s[6]),
+        longitude: Number(s[5])
+      }))
+      .filter((a) => distanceKm(q.lat, q.lon, a.latitude, a.longitude) <= radiusKm);
+  } catch {
+    return [];
+  }
+}
+
+// GET /api/aircraft – OpenSky state vectors within radius of QTH (proxy to avoid CORS)
+app.get("/api/aircraft", async (req, res) => {
+  const q = getQth();
+  if (!q) return res.status(400).json({ error: "Invalid QTH", detail: "Set locator in config", aircraft: [] });
+  const radiusKm = Math.min(50, Math.max(5, parseFloat(req.query.radiusKm) || 10));
+  const bbox = bboxFromCenterRadius(q.lat, q.lon, radiusKm);
+  try {
+    const url = `https://opensky-network.org/api/states/all?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`;
+    const headers = { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" };
+    const token = await getOpenSkyToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) throw new Error(`OpenSky ${resp.status}`);
+    const data = await resp.json();
+    const AIRCRAFT_CATEGORY = {
+      0: "No info", 1: "No ADS-B", 2: "Light", 3: "Small", 4: "Large", 5: "High Vortex Large",
+      6: "Heavy", 7: "High Performance", 8: "Rotorcraft", 9: "Glider", 10: "Lighter-than-air",
+      11: "Parachutist", 12: "Ultralight", 14: "UAV", 15: "Space", 16: "Emergency vehicle",
+      17: "Service vehicle", 18: "Point obstacle", 19: "Cluster", 20: "Line"
+    };
+    const POSITION_SOURCE = { 0: "ADS-B", 1: "ASTERIX", 2: "MLAT", 3: "FLARM" };
+    const states = data.states || [];
+    const aircraft = states
+      .filter((s) => s && s[6] != null && s[5] != null)
+      .map((s) => {
+        const cat = s[17] != null ? s[17] : null;
+        const posSrc = s[16] != null ? s[16] : null;
+        return {
+          icao24: s[0] || null,
+          callsign: (s[1] || "").trim() || null,
+          origin_country: s[2] || null,
+          longitude: Number(s[5]),
+          latitude: Number(s[6]),
+          baro_altitude: s[7] != null ? Number(s[7]) : null,
+          geo_altitude: s[13] != null ? Number(s[13]) : null,
+          on_ground: !!s[8],
+          velocity: s[9] != null ? Number(s[9]) : null,
+          true_track: s[10] != null ? Number(s[10]) : null,
+          vertical_rate: s[11] != null ? Number(s[11]) : null,
+          squawk: s[14] != null ? String(s[14]).trim() : null,
+          category: cat,
+          category_label: AIRCRAFT_CATEGORY[cat] || (cat != null ? `Cat ${cat}` : null),
+          position_source: posSrc,
+          position_source_label: POSITION_SOURCE[posSrc] || (posSrc != null ? `Source ${posSrc}` : null)
+        };
+      })
+      .filter((a) => distanceKm(q.lat, q.lon, a.latitude, a.longitude) <= radiusKm);
+
+    // Enrich with metadata (typecode, model, operator) – cached per icao24
+    const enriched = await Promise.all(
+      aircraft.map(async (a) => {
+        const meta = a.icao24 ? await fetchAircraftMetadata(a.icao24) : null;
+        return {
+          ...a,
+          typecode: meta?.typecode || null,
+          model: meta?.model || null,
+          manufacturer: meta?.manufacturerName || meta?.manufacturer || null,
+          operator: meta?.operatorCallsign || meta?.operatorIcao || null,
+          registration: meta?.registration || null,
+          owner: meta?.owner || null,
+          serialNumber: meta?.serialNumber || meta?.serialnumber || null,
+          built: meta?.built || null
+        };
+      })
+    );
+
+    res.json({ aircraft: enriched, qth: q, radiusKm: Math.round(radiusKm), updated: new Date().toISOString() });
+  } catch (e) {
+    console.warn("OpenSky aircraft fetch failed:", e?.message || e);
+    res.status(502).json({ error: "aircraft_fetch_failed", detail: String(e), aircraft: [] });
+  }
+});
+
+/** AviationStack flight info cache (flight_icao -> { data, expires }) – optional, 6h TTL */
+const FLIGHT_INFO_CACHE = new Map();
+const FLIGHT_INFO_TTL_MS = 6 * 60 * 60 * 1000;
+
+// GET /api/aircraft/flight-info?flight_icao=DLH123 – optional AviationStack origin/destination
+app.get("/api/aircraft/flight-info", async (req, res) => {
+  const flightIcao = (req.query.flight_icao || req.query.callsign || "").toString().trim();
+  if (!flightIcao || flightIcao.length > 8) {
+    return res.json({ flight_icao: flightIcao || null, origin: null, destination: null, airline: null, departure: null, arrival: null });
+  }
+  const key = flightIcao.toUpperCase();
+  const hit = FLIGHT_INFO_CACHE.get(key);
+  if (hit && Date.now() < hit.expires) return res.json(hit.data);
+
+  const apiKey = process.env.AVIATIONSTACK_API_KEY || "";
+  if (!apiKey) return res.json({ flight_icao: flightIcao, origin: null, destination: null, airline: null, departure: null, arrival: null });
+
+  try {
+    const url = `https://api.aviationstack.com/v1/flights?access_key=${encodeURIComponent(apiKey)}&flight_icao=${encodeURIComponent(key)}&limit=1`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    const flight = Array.isArray(data?.data) && data.data.length > 0 ? data.data[0] : null;
+    const dep = flight?.departure;
+    const arr = flight?.arrival;
+    const result = {
+      flight_icao: flightIcao,
+      origin: dep?.iata || dep?.icao || dep?.airport || null,
+      origin_name: dep?.airport || null,
+      destination: arr?.iata || arr?.icao || arr?.airport || null,
+      destination_name: arr?.airport || null,
+      airline: flight?.airline?.name || flight?.airline?.iata || flight?.airline?.icao || null,
+      departure: dep?.scheduled || dep?.estimated || dep?.actual || null,
+      arrival: arr?.scheduled || arr?.estimated || arr?.actual || null,
+      status: flight?.flight_status || null
+    };
+    FLIGHT_INFO_CACHE.set(key, { data: result, expires: Date.now() + FLIGHT_INFO_TTL_MS });
+    res.json(result);
+  } catch (e) {
+    console.warn("AviationStack flight-info:", e?.message || e);
+    res.json({ flight_icao: flightIcao, origin: null, destination: null, airline: null, departure: null, arrival: null });
+  }
+});
+
+// GET /api/aircraft/track?icao24=xxx – OpenSky trajectory (path waypoints)
+app.get("/api/aircraft/track", async (req, res) => {
+  const icao24 = (req.query.icao24 || "").toString().trim().toLowerCase();
+  if (!icao24 || !/^[a-f0-9]{6}$/i.test(icao24)) {
+    return res.status(400).json({ error: "Invalid icao24", detail: "Provide 6-char hex (e.g. 3c4b26)", path: [] });
+  }
+  const time = parseInt(req.query.time, 10) || 0; // 0 = live track
+  try {
+    const url = `https://opensky-network.org/api/tracks/all?icao24=${encodeURIComponent(icao24)}&time=${time}`;
+    const headers = { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" };
+    const token = await getOpenSkyToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) throw new Error(`OpenSky ${resp.status}`);
+    const data = await resp.json();
+    const path = (data.path || []).map((p) => ({
+      time: p[0],
+      latitude: p[1],
+      longitude: p[2],
+      baro_altitude: p[3],
+      true_track: p[4],
+      on_ground: !!p[5]
+    })).filter((p) => p.latitude != null && p.longitude != null);
+    res.json({
+      icao24: data.icao24,
+      callsign: data.calllsign || data.callsign,
+      startTime: data.startTime,
+      endTime: data.endTime,
+      path,
+      updated: new Date().toISOString()
+    });
+  } catch (e) {
+    console.warn("OpenSky track fetch failed:", e?.message || e);
+    res.status(502).json({ error: "track_fetch_failed", detail: String(e), path: [] });
+  }
+});
+
+// GET /api/earthquakes – USGS GeoJSON proxy (mag: 2.5 | 4.5 | all, period: day | week)
+const USGS_BASE = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary";
+app.get("/api/earthquakes", async (req, res) => {
+  const mag = (req.query.mag || "2.5").toString().toLowerCase();
+  const period = (req.query.period || "week").toString().toLowerCase();
+  const validMag = ["2.5", "4.5", "all"].includes(mag) ? mag : "2.5";
+  const validPeriod = ["day", "week"].includes(period) ? period : "week";
+  const feed = `${validMag}_${validPeriod}`;
+  const cacheKey = `usgs_eq_${feed}`;
+  try {
+    const data = await cached(cacheKey, 5 * 60 * 1000, async () => {
+      const url = `${USGS_BASE}/${feed}.geojson`;
+      const resp = await fetch(url, {
+        headers: { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" }
+      });
+      if (!resp.ok) throw new Error(`USGS ${resp.status}`);
+      return resp.json();
+    });
+    const features = (data.features || []).map((f) => {
+      const p = f.properties || {};
+      const g = f.geometry?.coordinates || [];
+      return {
+        id: f.id || p.code || null,
+        magnitude: p.mag ?? null,
+        place: p.place || null,
+        time: p.time || null,
+        updated: p.updated || null,
+        url: p.url || null,
+        title: p.title || null,
+        tsunami: !!p.tsunami,
+        alert: p.alert || null,
+        longitude: g[0],
+        latitude: g[1],
+        depth: g[2]
+      };
+    });
+    res.json({ earthquakes: features, metadata: data.metadata, feed });
+  } catch (e) {
+    console.warn("USGS earthquake fetch failed:", e?.message || e);
+    res.status(502).json({ error: "earthquake_fetch_failed", detail: String(e), earthquakes: [] });
+  }
+});
+
+// GET /api/lightning – Blitzortung strikes for map layer
+// Sources: 1) Blitzortung live API (if BLITZORTUNG_USER/PASS set), 2) limaps.org JSON archive
+app.get("/api/lightning", async (req, res) => {
+  const west = Number(req.query.west);
+  const east = Number(req.query.east);
+  const north = Number(req.query.north);
+  const south = Number(req.query.south);
+  const bbox = Number.isFinite(west) && Number.isFinite(east) && Number.isFinite(north) && Number.isFinite(south)
+    ? { west, east, north, south }
+    : { west: -15, east: 45, north: 72, south: 35 }; // default Europe
+
+  const user = process.env.BLITZORTUNG_USER || process.env.BLITZORTUNG_LOGIN;
+  const pass = process.env.BLITZORTUNG_PASS || process.env.BLITZORTUNG_PASSWORD;
+
+  async function fromLiveApi() {
+    if (!user || !pass) return null;
+    const auth = Buffer.from(`${user}:${pass}`).toString("base64");
+    const url = `https://data.blitzortung.org/Data/Protected/last_strikes.php?number=3000&sig=0&west=${bbox.west}&east=${bbox.east}&north=${bbox.north}&south=${bbox.south}`;
+    const r = await fetch(url, {
+      headers: { Authorization: `Basic ${auth}` }
+    });
+    if (!r.ok) return null;
+    const text = await r.text();
+    const lines = text.trim().split("\n").filter(Boolean);
+    const strikes = [];
+    for (const line of lines) {
+      try {
+        const o = JSON.parse(line);
+        if (Number.isFinite(o.lat) && Number.isFinite(o.lon)) {
+          strikes.push({
+            lat: o.lat,
+            lon: o.lon,
+            time: o.time != null ? Math.floor(Number(o.time) / 1e9) * 1000 : null,
+            alt: o.alt,
+            pol: o.pol
+          });
+        }
+      } catch {}
+    }
+    return strikes;
+  }
+
+  async function fromArchive() {
+    const now = new Date();
+    const slots = [];
+    for (let i = 0; i < 3; i++) {
+      const d = new Date(now.getTime() - (i + 1) * 10 * 60 * 1000);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      const h = String(d.getUTCHours()).padStart(2, "0");
+      const min = String(Math.floor(d.getUTCMinutes() / 10) * 10).padStart(2, "0");
+      slots.push(`C1/${y}/${m}/${day}/${h}/${min}`);
+    }
+    const base = "https://www.limaps.org/JSON";
+    const all = [];
+    for (const path of slots) {
+      try {
+        const r = await fetch(`${base}/${path}.json`, {
+          headers: { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" }
+        });
+        if (!r.ok) continue;
+        const text = await r.text();
+        for (const line of text.trim().split("\n").filter(Boolean)) {
+          try {
+            const o = JSON.parse(line);
+            const lat = Number(o.lat);
+            const lon = Number(o.lon);
+            if (Number.isFinite(lat) && Number.isFinite(lon) && lat >= bbox.south && lat <= bbox.north && lon >= bbox.west && lon <= bbox.east) {
+              all.push({
+                lat,
+                lon,
+                time: o.time != null ? Math.floor(Number(o.time) / 1e9) * 1000 : null,
+                alt: o.alt,
+                pol: o.pol
+              });
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+    return all.length ? all : null;
+  }
+
+  const cacheKey = `lightning_${bbox.west}_${bbox.east}_${bbox.north}_${bbox.south}`;
+  try {
+    const strikes = await cached(cacheKey, 60 * 1000, async () => {
+      const fromLive = await fromLiveApi();
+      if (fromLive && fromLive.length > 0) return fromLive;
+      return await fromArchive();
+    });
+    res.json({ strikes: strikes || [], source: user ? "blitzortung_live" : "archive" });
+  } catch (e) {
+    console.warn("Lightning fetch failed:", e?.message || e);
+    res.status(502).json({ error: "lightning_fetch_failed", detail: String(e), strikes: [] });
+  }
+});
+
+// GET /api/outdoor – UV index, air quality, forest fire links for SOTA/Field Day
+app.get("/api/outdoor", async (req, res) => {
+  const qth = getQth();
+  if (!qth || !Number.isFinite(qth.lat) || !Number.isFinite(qth.lon)) {
+    return res.status(400).json({ error: "Invalid QTH", detail: "Set locator or coordinates in config", uv: null, airQuality: null });
+  }
+  const { lat, lon } = qth;
+  const cacheKey = `outdoor_${lat.toFixed(4)}_${lon.toFixed(4)}`;
+  try {
+    const data = await cached(cacheKey, 60 * 60 * 1000, async () => {
+      const [uvRes, aqRes] = await Promise.all([
+        fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=uv_index_max&timezone=auto`),
+        fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=pm10,pm2_5,us_aqi,european_aqi`)
+      ]);
+      const uv = uvRes.ok ? await uvRes.json() : null;
+      const aq = aqRes.ok ? await aqRes.json() : null;
+      return { uv, aq };
+    });
+    const daily = data.uv?.daily || {};
+    const cur = data.aq?.current || {};
+    res.json({
+      lat,
+      lon,
+      uv: {
+        times: daily.time || [],
+        uv_index_max: daily.uv_index_max || [],
+        updated: data.uv?.generationtime_ms != null ? "ok" : null
+      },
+      airQuality: {
+        pm10: cur.pm10,
+        pm2_5: cur.pm2_5,
+        us_aqi: cur.us_aqi,
+        european_aqi: cur.european_aqi,
+        time: cur.time,
+        updated: cur.time ? "ok" : null
+      },
+      source: "Open-Meteo"
+    });
+  } catch (e) {
+    console.warn("Outdoor fetch failed:", e?.message || e);
+    res.status(502).json({ error: "outdoor_fetch_failed", detail: String(e), uv: null, airQuality: null });
+  }
+});
+
+// GET /api/warnings – NINA/Katwarn/BBK civil protection (warnung.bund.de)
+const WARNUNG_BASE = "https://warnung.bund.de/api31";
+const SOURCES = [
+  { key: "dwd", label: "DWD", url: `${WARNUNG_BASE}/dwd/mapData.json` },
+  { key: "mowas", label: "MoWaS", url: `${WARNUNG_BASE}/mowas/mapData.json` },
+  { key: "lhp", label: "LHP", url: `${WARNUNG_BASE}/lhp/mapData.json` },
+  { key: "biwapp", label: "Biwapp", url: `${WARNUNG_BASE}/biwapp/mapData.json` }
+];
+app.get("/api/warnings", async (req, res) => {
+  const sourceFilter = (req.query.source || "").toString().toLowerCase();
+  const validSources = sourceFilter ? SOURCES.filter((s) => s.key === sourceFilter) : SOURCES;
+  const qth = getQth();
+  const hasCoords = qth && Number.isFinite(qth.lat) && Number.isFinite(qth.lon);
+  const cacheKey = hasCoords
+    ? `warnings_${validSources.map((s) => s.key).join("_")}_${qth.lat.toFixed(4)}_${qth.lon.toFixed(4)}`
+    : `warnings_${validSources.map((s) => s.key).join("_")}`;
+  try {
+    const warnings = await cached(cacheKey, 5 * 60 * 1000, async () => {
+      const all = [];
+      for (const s of validSources) {
+        try {
+          const r = await fetch(s.url, {
+            headers: { "User-Agent": "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)" }
+          });
+          if (!r.ok) continue;
+          const arr = await r.json();
+          if (!Array.isArray(arr)) continue;
+          for (const w of arr) {
+            if (w.type === "Cancel" && w.urgency === "Past") continue;
+            const title = (w.i18nTitle && (w.i18nTitle.de || w.i18nTitle.en)) || w.id || "—";
+            const url = w.id ? `https://warnung.bund.de/meldungen/${encodeURIComponent(w.id)}` : null;
+            all.push({
+              id: w.id,
+              source: s.key,
+              sourceLabel: s.label,
+              title: String(title).trim(),
+              severity: w.severity || "Unknown",
+              urgency: w.urgency || "Unknown",
+              type: w.type || "Alert",
+              startDate: w.startDate || null,
+              expiresDate: w.expiresDate || null,
+              url
+            });
+          }
+        } catch (e) {
+          console.warn(`Warnings fetch ${s.key}:`, e?.message || e);
+        }
+      }
+      // Filter by QTH: only keep warnings whose GeoJSON polygon contains the point
+      let filtered = all;
+      if (hasCoords && all.length > 0) {
+        const base = "https://warnung.bund.de/api31";
+        const fetchGeoJson = async (id) => {
+          if (!id) return null;
+          const hit = cache.get(`nina_geojson_${id}`);
+          if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.v;
+          try {
+            const rr = await fetch(`${base}/warnings/${encodeURIComponent(id)}.geojson`, { headers: { "User-Agent": "HamshackDashboard/1.0" } });
+            if (!rr.ok) return null;
+            const geojson = await rr.json();
+            cache.set(`nina_geojson_${id}`, { t: Date.now(), v: geojson });
+            return geojson;
+          } catch {
+            return null;
+          }
+        };
+        const results = await Promise.all(all.map((w) => fetchGeoJson(w.id)));
+        filtered = all.filter((w, i) => {
+          const geojson = results[i];
+          if (!geojson) return false;
+          return pointInGeoJson(qth.lon, qth.lat, geojson);
+        });
+      }
+      const severityOrder = { Severe: 0, Moderate: 1, Minor: 2, Unknown: 3 };
+      filtered.sort((a, b) => {
+        const sa = severityOrder[a.severity] ?? 4;
+        const sb = severityOrder[b.severity] ?? 4;
+        if (sa !== sb) return sa - sb;
+        const da = a.startDate ? new Date(a.startDate).getTime() : 0;
+        const db = b.startDate ? new Date(b.startDate).getTime() : 0;
+        return db - da;
+      });
+      return filtered;
+    });
+    res.json({ warnings, sources: SOURCES.map((s) => s.key) });
+  } catch (e) {
+    console.warn("Warnings fetch failed:", e?.message || e);
+    res.status(502).json({ error: "warnings_fetch_failed", detail: String(e), warnings: [] });
   }
 });
 
