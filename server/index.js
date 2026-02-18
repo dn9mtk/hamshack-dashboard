@@ -10,6 +10,7 @@ import { XMLParser } from "fast-xml-parser";
 import * as sat from "satellite.js";
 import OpenAI from "openai";
 import { search as ddgSearch } from "duck-duck-scrape";
+import { io } from "socket.io-client";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1284,63 +1285,94 @@ app.get("/api/propagation/path", async (req, res) => {
 
 // --------------------
 // Terrain horizon polygon (visibility cloak) – maßstabgetreu
-// Computes line-of-sight horizon using Open-Elevation, returns GeoJSON polygon
+// Line-of-sight horizon from elevation data. Open-Meteo (primary), OpenTopoData (fallback).
 // --------------------
 const R_EFF_KM = 6371 * (4 / 3); // 4/3 Earth radius for radio horizon
+const ELEV_MAX = 100; // Max points per API request
+
+/** Open-Meteo elevation – Copernicus DEM 90m, global, reliable. */
+async function fetchElevationsOpenMeteo(locations) {
+  if (locations.length === 0) return [];
+  const lats = locations.map((l) => l.lat).join(",");
+  const lons = locations.map((l) => l.lon).join(",");
+  const url = `https://api.open-meteo.com/v1/elevation?latitude=${encodeURIComponent(lats)}&longitude=${encodeURIComponent(lons)}`;
+  const r = await fetch(url, {
+    headers: { "User-Agent": "HamshackDashboard/1.0" }
+  });
+  if (!r.ok) throw new Error(`Open-Meteo ${r.status}`);
+  const j = await r.json();
+  const arr = j?.elevation;
+  if (!Array.isArray(arr) || arr.length !== locations.length) throw new Error("Incomplete elevation data");
+  return arr.map((v) => (Number.isFinite(v) ? v : 0));
+}
+
+/** OpenTopoData – EU DEM 25m for Europe (fallback). */
+async function fetchElevationsOpenTopo(locations) {
+  if (locations.length === 0) return [];
+  const locStr = locations.slice(0, ELEV_MAX).map((l) => `${l.lat},${l.lon}`).join("|");
+  const url = `https://api.opentopodata.org/v1/eudem25m?locations=${encodeURIComponent(locStr)}`;
+  const r = await fetch(url, {
+    headers: { "User-Agent": "HamshackDashboard/1.0" }
+  });
+  if (!r.ok) throw new Error(`OpenTopoData ${r.status}`);
+  const j = await r.json();
+  const results = j?.results || [];
+  return results.map((x) => (Number.isFinite(x?.elevation) ? x.elevation : 0));
+}
+
+async function fetchElevations(locations) {
+  if (locations.length > ELEV_MAX) {
+    const out = [];
+    for (let i = 0; i < locations.length; i += ELEV_MAX) {
+      const chunk = locations.slice(i, i + ELEV_MAX);
+      const elev = await fetchElevations(chunk);
+      out.push(...elev);
+    }
+    return out;
+  }
+  try {
+    return await fetchElevationsOpenMeteo(locations);
+  } catch (e1) {
+    try {
+      return await fetchElevationsOpenTopo(locations);
+    } catch (e2) {
+      throw new Error(`Elevation failed: ${e1.message}; fallback: ${e2.message}`);
+    }
+  }
+}
+
 app.get("/api/horizon/terrain", async (req, res) => {
   try {
-    const fromQ = getQth();
-    if (!fromQ) return res.status(400).json({ error: "Invalid QTH locator", detail: "Set locator in config" });
+    const latQ = Number(req.query.lat);
+    const lonQ = Number(req.query.lon);
+    let fromQ = null;
+    if (Number.isFinite(latQ) && Number.isFinite(lonQ)) {
+      fromQ = { lat: latQ, lon: lonQ };
+    } else {
+      fromQ = getQth();
+    }
+    if (!fromQ) return res.status(400).json({ error: "Invalid QTH locator", detail: "Set locator in config or pass lat/lon" });
     const antennaHeightM = Number(req.query.h) ?? (Number.isFinite(CONFIG.antennaHeight) ? CONFIG.antennaHeight : 11);
 
-    const NUM_BEARINGS = 72;
-    const STEP_KM = 2;
-    const MAX_KM = 60;
-    const distances = [];
-    for (let d = STEP_KM; d <= MAX_KM; d += STEP_KM) distances.push(d);
-
+    const NUM_BEARINGS = 19;
+    const DISTANCES_KM = [4, 12, 24, 36, 60];
     const points = [];
     for (let b = 0; b < NUM_BEARINGS; b++) {
       const bearing = (b / NUM_BEARINGS) * 360;
-      for (const dist of distances) {
+      for (const dist of DISTANCES_KM) {
         const p = destinationPoint(fromQ.lat, fromQ.lon, bearing, dist);
         points.push({ lat: p.lat, lon: p.lon, bearingIdx: b, distKm: dist });
       }
     }
+    const qthLoc = { lat: fromQ.lat, lon: fromQ.lon };
+    const allLocs = [qthLoc, ...points.map((p) => ({ lat: p.lat, lon: p.lon }))];
 
-    const locs = points.map((p) => ({ latitude: p.lat, longitude: p.lon }));
-    const er = await fetch("https://api.open-elevation.com/api/v1/lookup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ locations: locs })
-    });
-    if (!er.ok) {
-      return res.status(502).json({ error: "Elevation service unavailable" });
+    const elevations = await fetchElevations(allLocs);
+    if (elevations.length !== allLocs.length) {
+      return res.status(502).json({ error: "Incomplete elevation data", detail: `Got ${elevations.length}/${allLocs.length}` });
     }
-    const ej = await er.json();
-    const results = Array.isArray(ej?.results) ? ej.results : [];
-    if (results.length !== points.length) {
-      return res.status(502).json({ error: "Incomplete elevation data" });
-    }
-
-    for (let i = 0; i < points.length; i++) {
-      points[i].elevation = Number.isFinite(results[i]?.elevation) ? results[i].elevation : 0;
-    }
-
-    const qthElev = Number.isFinite(CONFIG.elevation)
-      ? CONFIG.elevation
-      : await (async () => {
-        try {
-          const r = await fetch(
-            `https://api.open-elevation.com/api/v1/lookup?locations=${fromQ.lat},${fromQ.lon}`
-          );
-          if (!r.ok) return 0;
-          const j = await r.json();
-          return Number.isFinite(j?.results?.[0]?.elevation) ? j.results[0].elevation : 0;
-        } catch {
-          return 0;
-        }
-      })();
+    const qthElev = Number.isFinite(CONFIG.elevation) ? CONFIG.elevation : elevations[0];
+    for (let i = 0; i < points.length; i++) points[i].elevation = elevations[i + 1];
     const h1 = qthElev + antennaHeightM;
 
     const horizonPoints = [];
@@ -1348,7 +1380,6 @@ app.get("/api/horizon/terrain", async (req, res) => {
       const ray = points.filter((p) => p.bearingIdx === b).sort((a, b) => a.distKm - b.distKm);
       let horizonLat = fromQ.lat;
       let horizonLon = fromQ.lon;
-      let horizonDist = 0;
       for (let j = 0; j < ray.length; j++) {
         const pt = ray[j];
         const d = pt.distKm;
@@ -1367,7 +1398,6 @@ app.get("/api/horizon/terrain", async (req, res) => {
         if (blocked) break;
         horizonLat = pt.lat;
         horizonLon = pt.lon;
-        horizonDist = d;
       }
       horizonPoints.push([horizonLon, horizonLat]);
     }
@@ -1384,11 +1414,12 @@ app.get("/api/horizon/terrain", async (req, res) => {
 
     res.json({
       type: "Feature",
-      properties: { source: "terrain", antennaHeightM: antennaHeightM },
+      properties: { source: "terrain", antennaHeightM },
       geometry: { type: "Polygon", coordinates: [coords] }
     });
   } catch (e) {
-    res.status(500).json({ error: "terrain_horizon_failed", detail: String(e) });
+    console.warn("Terrain horizon failed:", e?.message || e);
+    res.status(502).json({ error: "terrain_horizon_failed", detail: String(e) });
   }
 });
 
@@ -3096,6 +3127,78 @@ app.get("/api/repeaters", (req, res) => {
     console.warn("Repeaters read failed:", e?.message || e);
     res.status(500).json({ error: "repeaters_failed", detail: String(e), items: [] });
   }
+});
+
+// --------------------
+// BrandMeister Last Heard (DMR real-time via Socket.IO)
+// --------------------
+const BRANDMEISTER_LH_MAX = 50;
+const brandmeisterLastHeard = [];
+let brandmeisterSocket = null;
+
+function ensureBrandmeisterSocket() {
+  if (brandmeisterSocket?.connected) return;
+  if (brandmeisterSocket) {
+    try { brandmeisterSocket.disconnect(); } catch {}
+    brandmeisterSocket = null;
+  }
+  try {
+    brandmeisterSocket = io("https://api.brandmeister.network", {
+      path: "/lh/socket.io",
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 5000
+    });
+    brandmeisterSocket.on("connect", () => {
+      console.log("BrandMeister Last Heard: connected");
+    });
+    brandmeisterSocket.on("disconnect", (reason) => {
+      console.log("BrandMeister Last Heard: disconnected", reason);
+    });
+    brandmeisterSocket.on("connect_error", (err) => {
+      console.warn("BrandMeister Last Heard: connection error", err?.message || err);
+    });
+    brandmeisterSocket.on("mqtt", (data) => {
+      const ev = data?.Event;
+      if (!ev) return;
+      if (ev === "Session-Start" || ev === "Session-Update") {
+        const sourceId = data.SourceID;
+        const destId = data.DestinationID;
+        if (sourceId == null && destId == null) return;
+        const entry = {
+          ts: Date.now(),
+          sourceId: sourceId != null ? Number(sourceId) : null,
+          destId: destId != null ? Number(destId) : null,
+          linkName: (data.LinkName || "").trim() || null,
+          slot: data.Slot != null ? Number(data.Slot) : null,
+          event: ev
+        };
+        brandmeisterLastHeard.unshift(entry);
+        if (brandmeisterLastHeard.length > BRANDMEISTER_LH_MAX) {
+          brandmeisterLastHeard.length = BRANDMEISTER_LH_MAX;
+        }
+      }
+    });
+  } catch (e) {
+    console.warn("BrandMeister Socket.IO init failed:", e?.message || e);
+  }
+}
+
+app.get("/api/brandmeister/lastheard", (req, res) => {
+  ensureBrandmeisterSocket();
+  const limit = Math.min(50, Math.max(5, parseInt(req.query.limit, 10) || 30));
+  const slice = brandmeisterLastHeard.slice(0, limit).map((e) => ({
+    ts: e.ts,
+    sourceId: e.sourceId,
+    destId: e.destId,
+    linkName: e.linkName,
+    slot: e.slot
+  }));
+  res.json({
+    entries: slice,
+    connected: !!brandmeisterSocket?.connected
+  });
 });
 
 // GET /api/aprs/status – check if APRS (aprs.fi) is configured

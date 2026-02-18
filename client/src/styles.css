@@ -1819,6 +1819,33 @@
   .map-container .leaflet-tooltip.map-marker-tooltip-wrap::before {
     border-top-color: rgba(12, 25, 45, 0.96);
   }
+  /* Aircraft markers – small plane icon, rotated by heading */
+  .aircraft-marker-wrap {
+    background: none !important;
+    border: none !important;
+  }
+  .aircraft-marker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform-origin: center center;
+  }
+  .aircraft-marker-inner {
+    transform-origin: center center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .aircraft-marker-inner svg {
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+  }
+  .aircraft-marker-wrap.aircraft-marker--focused .aircraft-marker-inner {
+    transform: scale(1.35);
+  }
+  .aircraft-marker-wrap.aircraft-marker--focused .aircraft-marker-inner svg {
+    filter: drop-shadow(0 0 6px rgba(245,159,0,0.9));
+  }
+
   .map-marker-tooltip strong {
     color: #fff;
     font-weight: 600;

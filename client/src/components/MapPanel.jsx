@@ -337,6 +337,7 @@ export default function MapPanel({
   repeatersBandFilter = "2m",
   onRepeatersBandChange,
   onSelectRepeater,
+  onSelectXota,
   focusedRepeater,
   radioHorizon = null,
   antennaHeight = 11,
@@ -448,6 +449,14 @@ export default function MapPanel({
       setLightningLayerOn(false);
       setter((on) => !on);
     };
+  }
+
+  function handleXotaLayerToggle() {
+    setLightningLayerOn(false);
+    setXotaLayerOn((on) => {
+      if (!on) onSelectXota?.();
+      return !on;
+    });
   }
 
   useEffect(() => {
@@ -628,6 +637,16 @@ export default function MapPanel({
       if (map.hasLayer(layer)) map.removeLayer(layer);
     }
   }, [repeatersLayerOn, mapReady]);
+
+  // Repeaters must stay on top so they remain clickable (above spots, xOTA, aircraft, etc.)
+  // LayerGroup has no bringToFront; remove+add brings to front
+  useEffect(() => {
+    const layer = repeaterLayerRef.current;
+    const map = mapRef.current;
+    if (!repeatersLayerOn || !layer || !map || !map.hasLayer(layer)) return;
+    map.removeLayer(layer);
+    map.addLayer(layer);
+  }, [repeatersLayerOn, spotsLayerOn, dxpeditionsLayerOn, xotaLayerOn, satellitesLayerOn, beaconsLayerOn, aprsLayerOn, aircraftLayerOn, earthquakesLayerOn, lightningLayerOn, horizonLayerOn, mapReady]);
 
   // Sync APRS layer visibility with map
   useEffect(() => {
@@ -1065,24 +1084,35 @@ export default function MapPanel({
         const j = await r.json();
         const list = j.aircraft || [];
         layer.clearLayers();
-        const AIRCRAFT_COLOR = "#f59f00";
+        const heading = a => (a.true_track != null && Number.isFinite(a.true_track) ? a.true_track : 0);
+        const planeSvg = (deg) => `
+          <div class="aircraft-marker" style="transform:rotate(${deg}deg)">
+            <div class="aircraft-marker-inner">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="#f59f00" stroke="#e67700" stroke-width="1">
+                <path d="M12 0 L20 12 L12 8 L4 12 Z"/>
+              </svg>
+            </div>
+          </div>`;
         list.forEach((a) => {
           const lat = Number(a.latitude);
           const lon = Number(a.longitude);
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-          const marker = L.circleMarker([lat, lon], {
-            radius: 6,
-            weight: 2,
-            fillOpacity: 0.9,
-            color: AIRCRAFT_COLOR,
-            fillColor: AIRCRAFT_COLOR
+          const deg = heading(a);
+          const marker = L.marker([lat, lon], {
+            icon: L.divIcon({
+              className: "aircraft-marker-wrap",
+              html: planeSvg(deg),
+              iconSize: [24, 24],
+              iconAnchor: [12, 12]
+            })
           }).addTo(layer);
+          marker._aircraftData = a;
           marker.bindPopup(buildAircraftPopup(a), { autoPan: false });
           const call = (a.callsign || a.icao24 || "—").toString();
           const line2 = [[a.typecode, a.model].filter(Boolean).join(" / ") || null, a.operator, a.registration].filter(Boolean).join(" · ");
           const line3 = [a.origin_country, a.baro_altitude != null ? `${Math.round(a.baro_altitude)} m` : null, a.velocity != null ? `${Math.round(a.velocity * 1.944)} kt` : null, a.true_track != null ? `${Math.round(a.true_track)}°` : null].filter(Boolean).join(" · ") + (a.on_ground ? " · GND" : "");
           const tt = `<div class="map-marker-tooltip"><strong>${escapeHtml(call)}</strong>${line2 ? `<br/>${escapeHtml(line2)}` : ""}${line3 ? `<br/>${escapeHtml(line3)}` : ""}</div>`;
-          marker.bindTooltip(tt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+          marker.bindTooltip(tt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -12] });
         });
       } catch (err) {
         if (alive) console.warn("Aircraft layer:", err);
@@ -1325,15 +1355,14 @@ export default function MapPanel({
       const layer = aircraftLayerRef.current;
       if (!layer || typeof layer.eachLayer !== "function") return;
       layer.eachLayer((marker) => {
-        if (!marker || !marker.getLatLng || !marker.setStyle) return;
+        if (!marker || !marker.getLatLng) return;
         const p = marker.getLatLng();
         const isMatch = Math.abs(p.lat - latNum) < 0.0001 && Math.abs(p.lng - lonNum) < 0.0001;
-        if (isMatch) {
-          marker.setStyle({ radius: 12, weight: 4, fillOpacity: 1 });
-          if (marker.openPopup) marker.openPopup();
-          if (marker.bringToFront) marker.bringToFront();
-        } else {
-          marker.setStyle({ radius: 6, weight: 2 });
+        const el = marker._icon;
+        if (el) {
+          el.classList.toggle("aircraft-marker--focused", !!isMatch);
+          if (isMatch && marker.openPopup) marker.openPopup();
+          if (isMatch && marker.bringToFront) marker.bringToFront();
         }
       });
       setTimeout(reCenter, 100);
@@ -2026,6 +2055,9 @@ export default function MapPanel({
     };
   }, [selectedSatId, mapReady]);
 
+  // Terrain polygon cache: key = "lat,lon,h" -> latLngs. Prevents re-fetch on effect re-run.
+  const terrainCacheRef = useRef(new Map());
+
   // Radio horizon circles + terrain horizon polygon (from Range panel / API)
   useEffect(() => {
     const map = mapRef.current;
@@ -2057,33 +2089,47 @@ export default function MapPanel({
       });
       group.addLayer(circle);
     });
-    if (group.getLayers().length > 0) {
-      group.addTo(map);
-      horizonLayerRef.current = group;
+    group.addTo(map);
+    horizonLayerRef.current = group;
+
+    const h = Number.isFinite(antennaHeight) && antennaHeight >= 0 ? antennaHeight : 11;
+    const cacheKey = `${center.lat.toFixed(4)},${center.lon.toFixed(4)},${h}`;
+    const cached = terrainCacheRef.current.get(cacheKey);
+    if (cached) {
+      const poly = L.polygon(cached, {
+        color: "rgba(147, 51, 234, 0.95)",
+        fillColor: "rgba(147, 51, 234, 0.5)",
+        fillOpacity: 1,
+        weight: 2.5,
+        pane: "horizonPane"
+      });
+      group.addLayer(poly);
+    } else {
+      const qs = new URLSearchParams({ h: String(h), lat: String(center.lat), lon: String(center.lon) });
+      fetch(`/api/horizon/terrain?${qs.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((geo) => {
+          const coords = geo?.geometry?.coordinates?.[0];
+          if (Array.isArray(coords) && coords.length >= 3) {
+            const latLngs = coords.map(([lng, lt]) => [lt, lng]);
+            terrainCacheRef.current.set(cacheKey, latLngs);
+            if (horizonLayerRef.current === group && mapRef.current?.hasLayer?.(group)) {
+              const poly = L.polygon(latLngs, {
+                color: "rgba(147, 51, 234, 0.95)",
+                fillColor: "rgba(147, 51, 234, 0.5)",
+                fillOpacity: 1,
+                weight: 2.5,
+                pane: "horizonPane"
+              });
+              group.addLayer(poly);
+            }
+          }
+          // No fallback circle – fake 60 km circle is not real terrain
+        })
+        .catch(() => {});
     }
 
-    let cancelled = false;
-    const h = Number.isFinite(antennaHeight) && antennaHeight >= 0 ? antennaHeight : 11;
-    fetch(`/api/horizon/terrain?h=${encodeURIComponent(h)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((geo) => {
-        if (cancelled || !horizonLayerRef.current || !mapRef.current) return;
-        const coords = geo?.geometry?.coordinates?.[0];
-        if (!Array.isArray(coords) || coords.length < 3) return;
-        const latLngs = coords.map(([lon, lat]) => [lat, lon]);
-        const poly = L.polygon(latLngs, {
-          color: "rgba(147, 51, 234, 0.9)",
-          fillColor: "rgba(147, 51, 234, 0.25)",
-          fillOpacity: 1,
-          weight: 2,
-          pane: "horizonPane"
-        });
-        horizonLayerRef.current.addLayer(poly);
-      })
-      .catch(() => {});
-
     return () => {
-      cancelled = true;
       if (map && horizonLayerRef.current && map.hasLayer(horizonLayerRef.current)) {
         map.removeLayer(horizonLayerRef.current);
       }
@@ -2351,7 +2397,7 @@ export default function MapPanel({
             </button>
             <button
               type="button"
-              onClick={handleOtherLayerToggle(setXotaLayerOn)}
+              onClick={handleXotaLayerToggle}
               aria-label={xotaLayerOn ? "Hide xOTA layer" : "Show xOTA layer"}
               title={xotaLayerOn ? "xOTA (POTA/SOTA/IOTA/COTA) layer on – click to hide" : "xOTA layer off – click to show activators on map"}
               style={{
@@ -2624,18 +2670,29 @@ export default function MapPanel({
               <div className="map-legend-box" style={{ border: "2px solid rgba(77,171,247,0.5)" }}>
                 <div className="map-legend-title">xOTA Activators</div>
                 <div className="map-legend-row">
-                  {XOTA_SIGS.map(({ sig, label }) => (
-                    <span key={sig} className="map-legend-item">
-                      <span
-                        className="map-legend-dot map-legend-dot--circle"
-                        style={{
-                          background: XOTA_TYPE_COLORS[sig] || "#868e96",
-                          borderColor: XOTA_TYPE_COLORS[sig] || "#868e96"
-                        }}
-                      />
-                      <span className="map-legend-label">{label}</span>
-                    </span>
-                  ))}
+                  {XOTA_SIGS.map(({ sig, label }) => {
+                    const program = sig === "WCA" ? "COTA" : sig;
+                    return (
+                      <button
+                        key={sig}
+                        type="button"
+                        className="map-legend-item"
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "inherit", font: "inherit", display: "inline-flex", alignItems: "center", gap: 4 }}
+                        onClick={() => onSelectXota?.(program)}
+                        title={`Show ${label} in xOTA panel`}
+                        aria-label={`Show ${label} in xOTA panel`}
+                      >
+                        <span
+                          className="map-legend-dot map-legend-dot--circle"
+                          style={{
+                            background: XOTA_TYPE_COLORS[sig] || "#868e96",
+                            borderColor: XOTA_TYPE_COLORS[sig] || "#868e96"
+                          }}
+                        />
+                        <span className="map-legend-label">{label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}

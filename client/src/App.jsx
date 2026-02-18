@@ -517,6 +517,10 @@ export default function App() {
               setSelectedRepeater(rep || null);
               setSidebarTabAndPersist("repeaters");
             }}
+            onSelectXota={(program) => {
+              setSidebarTabAndPersist("xota");
+              if (program) setXotaProgram(program);
+            }}
           />
         </section>
       </main>
