@@ -338,6 +338,7 @@ export default function MapPanel({
   onRepeatersBandChange,
   onSelectRepeater,
   onSelectXota,
+  onSelectPanel,
   focusedRepeater,
   radioHorizon = null,
   antennaHeight = 11,
@@ -731,6 +732,7 @@ export default function MapPanel({
             `</div>`;
           marker.bindPopup(popupContent);
           marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.callsign)}</strong><br/>${escapeHtml(x.entity || "—")}${dateStr ? `<br/>${escapeHtml(dateStr)}` : ""}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+          if (onSelectPanel) marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectPanel("dxpeditions"); });
         });
       } catch (err) {
         console.warn("DXpeditions layer:", err);
@@ -746,7 +748,7 @@ export default function MapPanel({
       };
     }
     return () => { alive = false; };
-  }, [dxpeditionsFilter, dxpeditionsLayerOn, mapReady]);
+  }, [dxpeditionsFilter, dxpeditionsLayerOn, mapReady, onSelectPanel]);
 
   // xOTA layer: fetch POTA, SOTA, IOTA, WCA in parallel, merge, color by sig
   useEffect(() => {
@@ -796,6 +798,7 @@ export default function MapPanel({
           marker.bindPopup(popupContent, { autoPan: false });
           const freqS = x.freqMhz != null ? `${x.freqMhz.toFixed(2)} MHz` : (x.frequency || "—");
           marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.activator)} · ${escapeHtml(label)}</strong><br/>${escapeHtml(refStr)}<br/>${escapeHtml(freqS)} · ${escapeHtml(x.mode || "—")}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+          if (onSelectXota) marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectXota(sig === "WCA" ? "COTA" : sig); });
         });
       } catch (err) {
         console.warn("xOTA layer:", err);
@@ -808,7 +811,7 @@ export default function MapPanel({
       return () => { alive = false; clearInterval(id); };
     }
     return () => { alive = false; };
-  }, [xotaLayerOn, mapReady]);
+  }, [xotaLayerOn, mapReady, onSelectXota]);
 
   // Repeaters layer: fetch Germany 2m/70cm/10m and draw markers (only those with lat/lon)
   useEffect(() => {
@@ -854,7 +857,7 @@ export default function MapPanel({
           // When clicking a repeater marker, notify the app so the sidebar
           // \"Repeater\" panel can select the corresponding entry.
           if (onSelectRepeater) {
-            marker.on("click", () => onSelectRepeater(x));
+            marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectRepeater(x); });
           }
         });
       } catch (err) {
@@ -921,6 +924,7 @@ export default function MapPanel({
             `</div>`;
           marker.bindPopup(popupContent, { autoPan: false });
           marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.name || "—")}</strong>${comment ? `<br/>${escapeHtml(comment.substring(0, 50))}${comment.length > 50 ? "…" : ""}` : ""}${lastTime ? `<br/>${escapeHtml(lastTime)}` : ""}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+          if (onSelectPanel) marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectPanel("aprs"); });
         });
       } catch (err) {
         if (alive) console.warn("APRS layer:", err);
@@ -936,7 +940,7 @@ export default function MapPanel({
       };
     }
     return () => { alive = false; };
-  }, [aprsLayerOn, aprsCallsignsVersion, mapReady]);
+  }, [aprsLayerOn, aprsCallsignsVersion, mapReady, onSelectPanel]);
 
   // Aircraft layer: OpenSky API, 12 km radius around QTH
   useEffect(() => {
@@ -1113,6 +1117,7 @@ export default function MapPanel({
           const line3 = [a.origin_country, a.baro_altitude != null ? `${Math.round(a.baro_altitude)} m` : null, a.velocity != null ? `${Math.round(a.velocity * 1.944)} kt` : null, a.true_track != null ? `${Math.round(a.true_track)}°` : null].filter(Boolean).join(" · ") + (a.on_ground ? " · GND" : "");
           const tt = `<div class="map-marker-tooltip"><strong>${escapeHtml(call)}</strong>${line2 ? `<br/>${escapeHtml(line2)}` : ""}${line3 ? `<br/>${escapeHtml(line3)}` : ""}</div>`;
           marker.bindTooltip(tt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -12] });
+          if (onSelectPanel) marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectPanel("aircraft", a); });
         });
       } catch (err) {
         if (alive) console.warn("Aircraft layer:", err);
@@ -1128,7 +1133,7 @@ export default function MapPanel({
       };
     }
     return () => { alive = false; };
-  }, [aircraftLayerOn, aircraftRadiusKm, mapReady]);
+  }, [aircraftLayerOn, aircraftRadiusKm, mapReady, onSelectPanel]);
 
   // Aircraft radius circle on map (when aircraft layer is on)
   useEffect(() => {
@@ -1210,6 +1215,7 @@ export default function MapPanel({
           marker.bindPopup(popupHtml, { autoPan: false });
           const tt = `<div class="map-marker-tooltip"><strong>${magStr}</strong><br/>${placeStr}</div>`;
           marker.bindTooltip(tt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+          if (onSelectPanel) marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectPanel("earthquakes", eq); });
         });
       } catch (err) {
         if (alive) console.warn("Earthquakes layer:", err);
@@ -1225,7 +1231,7 @@ export default function MapPanel({
       };
     }
     return () => { alive = false; };
-  }, [earthquakesLayerOn, earthquakeMag, earthquakePeriod, mapReady]);
+  }, [earthquakesLayerOn, earthquakeMag, earthquakePeriod, mapReady, onSelectPanel]);
 
   // Auto-enable earthquakes layer when focusing from sidebar
   useEffect(() => {
@@ -1841,6 +1847,7 @@ export default function MapPanel({
 
   // Draw spots that match the SAME filters as list
   useEffect(() => {
+    if (!mapReady || !spotLayerRef.current) return;
     let alive = true;
 
     async function refreshSpots() {
@@ -1901,6 +1908,7 @@ export default function MapPanel({
           marker.bindPopup(popupHtml(s));
           const spotTt = `<div class="map-marker-tooltip"><strong>${escapeHtml(s.dx)}</strong><br/>${escapeHtml(String(s.freq))} MHz · ${escapeHtml(s.mode || "—")} · ${escapeHtml(s.src || "")}<br/>via ${escapeHtml(s.spotter || "—")}${typeof s.distKm === "number" ? ` · ${s.distKm} km` : ""}</div>`;
           marker.bindTooltip(spotTt, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -16] });
+          if (onSelectPanel) marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectPanel("spots"); });
         });
       } catch (err) {
         console.warn("Failed to refresh spots:", err);
@@ -1922,7 +1930,7 @@ export default function MapPanel({
       clearInterval(id);
       window.removeEventListener("spotsFilterChanged", onFilter);
     };
-  }, []);
+  }, [onSelectPanel, mapReady]);
 
   // Satellites layer: fetch positions and draw markers (ISS + amateur sats)
   useEffect(() => {
@@ -1968,6 +1976,7 @@ export default function MapPanel({
           marker.on("click", (ev) => {
             L.DomEvent.stopPropagation(ev);
             setSelectedSatId(p.id);
+            if (onSelectPanel) onSelectPanel("sat");
           });
           marker.bindTooltip(p.id || p.name || "?", {
             permanent: false,
@@ -2002,7 +2011,7 @@ export default function MapPanel({
       layer.clearLayers();
       markerMap.clear();
     };
-  }, [satellitesLayerOn, mapReady]);
+  }, [satellitesLayerOn, mapReady, onSelectPanel]);
 
   // Satellite range + ground track when one is selected
   const selectedSatIdRef = useRef(null);

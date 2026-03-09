@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Clock from "./components/Clock.jsx";
 import MapPanel from "./components/MapPanel.jsx";
 import SpaceWeather from "./components/SpaceWeather.jsx";
@@ -134,12 +134,18 @@ export default function App() {
     saveRigFreq(value);
   }
 
-  function setSidebarTabAndPersist(id) {
+  const setSidebarTabAndPersist = useCallback((id) => {
     setSidebarTab(id);
     try {
       sessionStorage.setItem(SIDEBAR_TAB_KEY, id);
     } catch {}
-  }
+  }, []);
+
+  const handleSelectPanel = useCallback((panelId, data) => {
+    setSidebarTabAndPersist(panelId);
+    if (panelId === "aircraft" && data) setFocusedAircraft(data);
+    if (panelId === "earthquakes" && data) setFocusedEarthquake({ ...data, lat: data.latitude ?? data.lat, lon: data.longitude ?? data.lon });
+  }, [setSidebarTabAndPersist]);
 
   function loadConfig() {
     fetch("/api/config")
@@ -521,6 +527,7 @@ export default function App() {
               setSidebarTabAndPersist("xota");
               if (program) setXotaProgram(program);
             }}
+            onSelectPanel={handleSelectPanel}
           />
         </section>
       </main>
