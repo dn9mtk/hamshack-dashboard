@@ -1,6 +1,6 @@
 // Rig control service: polls rigctld while the dashboard is watching and offers
 // guarded frequency and mode changes. Off unless RIGCTLD_ENABLED=true.
-import { bandsForLicenceClass, resolveLicenceClass, validateFrequency } from "./bands.js";
+import { bandsForLicenceClass, formatMHz, resolveLicenceClass, validateFrequency } from "./bands.js";
 import { MODE_LABELS, hamlibModeForLabel, labelForHamlibMode } from "./modes.js";
 import { RigError, RigctldClient } from "./rigctld.js";
 
@@ -21,7 +21,8 @@ const HTTP_STATUS_BY_CODE = {
   rig_busy: 503,
   rig_timeout: 504,
   rig_error: 502,
-  rig_protocol: 502
+  rig_protocol: 502,
+  rig_mismatch: 502
 };
 
 function isLoopbackHost(host) {
@@ -56,6 +57,22 @@ export function readRigConfig(env, warn) {
   };
 }
 
+async function refuseDisabled() {
+  throw new RigError("rig_disabled", "Rig control is disabled on this server.");
+}
+
+function hamlibModeOrThrow(label) {
+  const hamlibMode = typeof label === "string" ? hamlibModeForLabel(label) : null;
+  if (!hamlibMode) {
+    throw new RigError("invalid_mode", `Unknown mode. Allowed: ${MODE_LABELS.join(", ")}. Nothing was sent to the rig.`);
+  }
+  return hamlibMode;
+}
+
+async function readModeLabel(rig) {
+  return labelForHamlibMode((await rig.getMode()).mode);
+}
+
 function disabledService() {
   return {
     enabled: false,
@@ -70,12 +87,9 @@ function disabledService() {
       updatedAt: null,
       error: null
     }),
-    async setFrequency() {
-      throw new RigError("rig_disabled", "Rig control is disabled on this server.");
-    },
-    async setMode() {
-      throw new RigError("rig_disabled", "Rig control is disabled on this server.");
-    },
+    setFrequency: refuseDisabled,
+    setMode: refuseDisabled,
+    tune: refuseDisabled,
     close() {}
   };
 }
@@ -171,6 +185,52 @@ export function createRigService({ env = process.env, log = console, now = Date.
     return getStatus();
   }
 
+  function checkedFrequency(value) {
+    const check = validateFrequency(value, licenceClass);
+    if (!check.ok) throw new RigError("invalid_frequency", check.message);
+    return check.freqHz;
+  }
+
+  // The FT-991A recalls the band-stack mode when set_freq changes the band, and set_mode may shift
+  // the frequency. So the frequency goes first, then the mode, then at most one corrective set_freq.
+  async function tune({ freqHz, mode } = {}) {
+    const targetHz = checkedFrequency(freqHz);
+    const hamlibMode = mode === undefined ? null : hamlibModeOrThrow(mode);
+    let reached;
+    const status = await guardedWrite(async (rig) => {
+      await rig.setFreq(targetHz);
+      if (hamlibMode && (await readModeLabel(rig)) !== mode) {
+        await rig.setMode(hamlibMode);
+        if ((await rig.getFreq()) !== targetHz) await rig.setFreq(targetHz);
+      }
+      reached = { freqHz: await rig.getFreq(), mode: await readModeLabel(rig) };
+      Object.assign(snapshot, reached);
+    });
+    if (hamlibMode && (reached.freqHz !== targetHz || reached.mode !== mode)) {
+      throw new RigError(
+        "rig_mismatch",
+        `The rig is on ${formatMHz(reached.freqHz)} ${reached.mode} instead of the requested ${formatMHz(targetHz)} ${mode}.`
+      );
+    }
+    return status;
+  }
+
+  /** Change the mode and put the frequency back if the rig shifted it (only within the licence bands). */
+  async function setMode(label) {
+    const hamlibMode = hamlibModeOrThrow(label);
+    return guardedWrite(async (rig) => {
+      const previousHz = await rig.getFreq();
+      await rig.setMode(hamlibMode);
+      snapshot.mode = await readModeLabel(rig);
+      let freqHz = await rig.getFreq();
+      if (freqHz !== previousHz && validateFrequency(previousHz, licenceClass).ok) {
+        await rig.setFreq(previousHz);
+        freqHz = await rig.getFreq();
+      }
+      snapshot.freqHz = freqHz;
+    });
+  }
+
   return {
     enabled: true,
     noteInterest() {
@@ -180,24 +240,9 @@ export function createRigService({ env = process.env, log = console, now = Date.
       poll();
     },
     getStatus,
-    async setFrequency(value) {
-      const check = validateFrequency(value, licenceClass);
-      if (!check.ok) throw new RigError("invalid_frequency", check.message);
-      return guardedWrite(async (rig) => {
-        await rig.setFreq(check.freqHz);
-        snapshot.freqHz = await rig.getFreq();
-      });
-    },
-    async setMode(label) {
-      const hamlibMode = typeof label === "string" ? hamlibModeForLabel(label) : null;
-      if (!hamlibMode) {
-        throw new RigError("invalid_mode", `Unknown mode. Allowed: ${MODE_LABELS.join(", ")}. Nothing was sent to the rig.`);
-      }
-      return guardedWrite(async (rig) => {
-        await rig.setMode(hamlibMode);
-        snapshot.mode = labelForHamlibMode((await rig.getMode()).mode);
-      });
-    },
+    setFrequency: (freqHz) => tune({ freqHz }),
+    setMode,
+    tune,
     close() {
       stopped = true;
       clearTimeout(pollTimer);
@@ -253,6 +298,13 @@ export function registerRigRoutes(app, service) {
   app.post("/api/rig/mode", rigWriteGuard, async (req, res) => {
     try {
       res.json(await service.setMode(req.body?.mode));
+    } catch (err) {
+      sendRigError(res, err);
+    }
+  });
+  app.post("/api/rig/tune", rigWriteGuard, async (req, res) => {
+    try {
+      res.json(await service.tune({ freqHz: req.body?.freqHz, mode: req.body?.mode }));
     } catch (err) {
       sendRigError(res, err);
     }

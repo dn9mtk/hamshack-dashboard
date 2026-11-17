@@ -23,6 +23,13 @@ const SERVER_DIR = fileURLToPath(new URL("../", import.meta.url));
 const LAUNCH_AGENT_SCRIPT = fileURLToPath(new URL("../scripts/rigctldLaunchAgent.js", import.meta.url));
 const READ_COMMANDS = ["+\\get_freq", "+\\get_mode", "+\\get_ptt", "+\\get_level STRENGTH"];
 const SYNTHETIC_DEVICE = "/dev/cu.usbserial-ABCD12340";
+const RIG_VERBS = ["get_freq", "get_mode", "get_ptt", "get_level", "set_freq", "set_mode"];
+// FT-991A quirks: set_freq into another band recalls that band's mode, set_mode shifts the frequency
+const BAND_STACK_MODES = [
+  { lowHz: 144_000_000, highHz: 146_000_000, mode: "CW" },
+  { lowHz: 430_000_000, highHz: 440_000_000, mode: "USB" }
+];
+const FT991A_QUIRKS = { bandStackModes: BAND_STACK_MODES, modeChangeOffsetHz: 700 };
 
 const cleanups = [];
 afterEach(async () => {
@@ -80,8 +87,15 @@ async function startRig({ env = {}, state = {}, interestWindowMs, fakeRunning = 
       return status.connected ? status : null;
     }, timeoutMs, "rig did not report connected");
   }
-  const writes = () => fake.received.filter((line) => /^\+\\set_/.test(line));
-  return { fake, service, logger, baseUrl, getRig, post, waitLive, writes };
+  const isWrite = (line) => /^\+\\set_/.test(line);
+  const writes = () => fake.received.filter(isWrite);
+  /** Run `action` and return its result with the writes the fake received meanwhile. */
+  async function writesDuring(action) {
+    const start = fake.received.length;
+    const result = await action();
+    return { result, writes: fake.received.slice(start).filter(isWrite) };
+  }
+  return { fake, service, logger, baseUrl, getRig, post, waitLive, writes, writesDuring };
 }
 
 describe("Licence class band table", () => {
@@ -216,6 +230,7 @@ describe("Rig control off by default", () => {
     assert.equal(service.enabled, false);
     assert.equal(service.getStatus().enabled, false);
     await assert.rejects(service.setFrequency(28_074_000), { code: "rig_disabled" });
+    await assert.rejects(service.tune({ freqHz: 28_074_000, mode: "USB" }), { code: "rig_disabled" });
     await sleep(600);
     assert.equal(fake.connections, 0);
   });
@@ -327,6 +342,7 @@ describe("Set frequency", () => {
     assert.equal(status, 409);
     assert.equal(body.error, "rig_transmitting");
     assert.equal((await rig.post("/api/rig/mode", { mode: "USB" })).status, 409);
+    assert.equal((await rig.post("/api/rig/tune", { freqHz: 28_074_000, mode: "USB" })).status, 409);
     assert.deepEqual(rig.writes(), []);
     assert.equal((await rig.getRig()).tx, true);
   });
@@ -336,9 +352,11 @@ describe("Set frequency", () => {
     await rig.waitLive();
     await rig.fake.stop();
     await waitFor(async () => !(await rig.getRig()).connected, 2000, "offline not detected");
-    const { status, body } = await rig.post("/api/rig/freq", { freqHz: 28_074_000 });
-    assert.equal(status, 503);
-    assert.equal(body.error, "rig_offline");
+    for (const [route, body] of [["/api/rig/freq", { freqHz: 28_074_000 }], ["/api/rig/tune", { freqHz: 28_074_000, mode: "USB" }]]) {
+      const r = await rig.post(route, body);
+      assert.equal(r.status, 503, route);
+      assert.equal(r.body.error, "rig_offline");
+    }
   });
 });
 
@@ -369,6 +387,145 @@ describe("Set mode", () => {
       assert.equal(body.error, "invalid_mode");
     }
     assert.deepEqual(rig.writes(), []);
+  });
+
+  it("puts the frequency back when the mode change shifted it", async () => {
+    const rig = await startRig({ state: { freqHz: 145_500_000, mode: "FM", modeChangeOffsetHz: 700 } });
+    await rig.waitLive();
+    const { result, writes } = await rig.writesDuring(() => rig.post("/api/rig/mode", { mode: "USB" }));
+    assert.equal(result.status, 200);
+    assert.equal(result.body.freqHz, 145_500_000);
+    assert.equal(result.body.mode, "USB");
+    assert.deepEqual(writes, ["+\\set_mode USB -1", "+\\set_freq 145500000"]);
+    const i = rig.fake.received.indexOf("+\\set_mode USB -1");
+    assert.deepEqual(rig.fake.received.slice(i - 2, i), ["+\\get_ptt", "+\\get_freq"]);
+    assert.equal(rig.fake.state.freqHz, 145_500_000);
+  });
+
+  it("sends only set_mode when the frequency stays", async () => {
+    const rig = await startRig({ state: { freqHz: 145_500_000, mode: "FM" } });
+    await rig.waitLive();
+    const { result, writes } = await rig.writesDuring(() => rig.post("/api/rig/mode", { mode: "USB" }));
+    assert.equal(result.status, 200);
+    assert.equal(result.body.freqHz, 145_500_000);
+    assert.deepEqual(writes, ["+\\set_mode USB -1"]);
+  });
+
+  it("does not put back a frequency outside the licence bands", async () => {
+    const rig = await startRig({ state: { freqHz: 7_074_000, mode: "PKTUSB", modeChangeOffsetHz: 700 } });
+    await rig.waitLive();
+    const { result, writes } = await rig.writesDuring(() => rig.post("/api/rig/mode", { mode: "USB" }));
+    assert.equal(result.status, 200);
+    assert.equal(result.body.freqHz, 7_074_700);
+    assert.equal(result.body.mode, "USB");
+    assert.deepEqual(writes, ["+\\set_mode USB -1"]);
+  });
+});
+
+describe("Combined tune", () => {
+  const ft991a = (state = {}, env = {}) => startRig({ env, state: { freqHz: 438_625_000, mode: "FM", ...FT991A_QUIRKS, ...state } });
+  // One poll for waitLive, the next one only after the test: the status shows what the tune job read
+  const NO_REPOLL = { RIG_POLL_MS: "60000" };
+
+  it("ends on the requested frequency and mode across band changes", async () => {
+    const rig = await ft991a();
+    await rig.waitLive();
+
+    const to2m = await rig.writesDuring(() => rig.post("/api/rig/tune", { freqHz: 145_500_000, mode: "FM" }));
+    assert.equal(to2m.result.status, 200);
+    assert.equal(to2m.result.body.freqHz, 145_500_000);
+    assert.equal(to2m.result.body.mode, "FM");
+    assert.deepEqual(to2m.writes, ["+\\set_freq 145500000", "+\\set_mode FM -1", "+\\set_freq 145500000"]);
+    const i = rig.fake.received.indexOf("+\\set_freq 145500000");
+    assert.equal(rig.fake.received[i - 1], "+\\get_ptt");
+    assert.deepEqual([rig.fake.state.freqHz, rig.fake.state.mode], [145_500_000, "FM"]);
+
+    const back = await rig.writesDuring(() => rig.post("/api/rig/tune", { freqHz: 438_625_000, mode: "FM" }));
+    assert.equal(back.result.status, 200);
+    assert.equal(back.result.body.freqHz, 438_625_000);
+    assert.equal(back.result.body.mode, "FM");
+    assert.deepEqual(back.writes, ["+\\set_freq 438625000", "+\\set_mode FM -1", "+\\set_freq 438625000"]);
+    const j = rig.fake.received.indexOf("+\\set_freq 438625000");
+    assert.equal(rig.fake.received[j - 1], "+\\get_ptt");
+    assert.deepEqual([rig.fake.state.freqHz, rig.fake.state.mode], [438_625_000, "FM"]);
+  });
+
+  it("sends only set_freq within the band when the mode already matches", async () => {
+    const rig = await ft991a();
+    await rig.waitLive();
+    const { result, writes } = await rig.writesDuring(() => rig.post("/api/rig/tune", { freqHz: 438_500_000, mode: "FM" }));
+    assert.equal(result.status, 200);
+    assert.equal(result.body.freqHz, 438_500_000);
+    assert.equal(result.body.mode, "FM");
+    assert.deepEqual(writes, ["+\\set_freq 438500000"]);
+  });
+
+  it("answers 400 and sends nothing for a bad frequency or mode", async () => {
+    const rig = await ft991a();
+    await rig.waitLive();
+    const bad = [
+      [{ freqHz: 14_074_000, mode: "USB" }, "invalid_frequency"],
+      [{ freqHz: "145500000", mode: "FM" }, "invalid_frequency"],
+      [{ mode: "FM" }, "invalid_frequency"],
+      [{ freqHz: 145_500_000, mode: "fm" }, "invalid_mode"],
+      [{ freqHz: 145_500_000, mode: "PKTUSB" }, "invalid_mode"],
+      [{ freqHz: 145_500_000, mode: null }, "invalid_mode"],
+      [{ freqHz: 145_500_000, mode: 7 }, "invalid_mode"]
+    ];
+    for (const [body, error] of bad) {
+      const r = await rig.post("/api/rig/tune", body);
+      assert.equal(r.status, 400, JSON.stringify(body));
+      assert.equal(r.body.error, error, JSON.stringify(body));
+    }
+    assert.deepEqual(rig.writes(), []);
+  });
+
+  it("answers 502 rig_mismatch after one correction and shows where the rig is", async () => {
+    const rig = await ft991a({ setFreqErrorHz: 25 }, NO_REPOLL);
+    await rig.waitLive();
+    const { result, writes } = await rig.writesDuring(() => rig.post("/api/rig/tune", { freqHz: 145_500_000, mode: "FM" }));
+    assert.equal(result.status, 502);
+    assert.equal(result.body.error, "rig_mismatch");
+    assert.equal(result.body.message, "The rig is on 145.500025 MHz FM instead of the requested 145.5 MHz FM.");
+    assert.deepEqual(writes, ["+\\set_freq 145500000", "+\\set_mode FM -1", "+\\set_freq 145500000"]);
+    const status = await rig.getRig();
+    assert.equal(status.freqHz, 145_500_025);
+    assert.equal(status.mode, "FM");
+  });
+
+  it("stops at a command the rig rejects in the middle of a tune", async () => {
+    const rig = await ft991a({ failCommandOnce: "set_mode" }, NO_REPOLL);
+    await rig.waitLive();
+    const { result, writes } = await rig.writesDuring(() => rig.post("/api/rig/tune", { freqHz: 145_500_000, mode: "FM" }));
+    assert.equal(result.status, 502);
+    assert.equal(result.body.error, "rig_error");
+    assert.deepEqual(writes, ["+\\set_freq 145500000", "+\\set_mode FM -1"]);
+    assert.equal(rig.fake.received.at(-1), "+\\set_mode FM -1");
+    assert.deepEqual([rig.fake.state.freqHz, rig.fake.state.mode], [145_500_000, "CW"]);
+  });
+
+  it("POST /api/rig/freq reads the recalled mode back after a band change", async () => {
+    const rig = await ft991a();
+    await rig.waitLive();
+    const { result, writes } = await rig.writesDuring(() => rig.post("/api/rig/freq", { freqHz: 145_500_000 }));
+    assert.equal(result.status, 200);
+    assert.equal(result.body.freqHz, 145_500_000);
+    assert.equal(result.body.mode, "CW-U");
+    assert.deepEqual(writes, ["+\\set_freq 145500000"]);
+  });
+
+  it("sends only allowlisted commands during tune and mode restore", async () => {
+    const rig = await ft991a({ setFreqErrorHz: 25 });
+    await rig.waitLive();
+    assert.equal((await rig.post("/api/rig/tune", { freqHz: 145_500_000, mode: "FM" })).status, 502);
+    rig.fake.state.setFreqErrorHz = 0;
+    assert.equal((await rig.post("/api/rig/tune", { freqHz: 438_625_000, mode: "FM" })).status, 200);
+    assert.equal((await rig.post("/api/rig/mode", { mode: "USB" })).status, 200);
+    assert.equal(rig.writes().length, 8);
+    for (const line of rig.fake.received) {
+      assert.ok(isAllowedCommand(line), line);
+      assert.ok(RIG_VERBS.includes(line.replace(/^\+\\/, "").split(" ")[0]), line);
+    }
   });
 });
 
@@ -449,6 +606,8 @@ describe("Write request hardening", () => {
     assert.equal(plain.status, 415);
     const form = await rig.post("/api/rig/mode", "mode=USB", { "Content-Type": "application/x-www-form-urlencoded" });
     assert.equal(form.status, 415);
+    const tune = await rig.post("/api/rig/tune", JSON.stringify({ freqHz: 28_074_000, mode: "USB" }), { "Content-Type": "text/plain" });
+    assert.equal(tune.status, 415);
     assert.deepEqual(rig.writes(), []);
   });
 
@@ -458,6 +617,8 @@ describe("Write request hardening", () => {
     for (const origin of ["http://evil.example", "null", `http://127.0.0.1:1`]) {
       const r = await rig.post("/api/rig/freq", { freqHz: 28_074_000 }, { "Content-Type": "application/json", Origin: origin });
       assert.equal(r.status, 403, origin);
+      const tune = await rig.post("/api/rig/tune", { freqHz: 28_074_000, mode: "USB" }, { "Content-Type": "application/json", Origin: origin });
+      assert.equal(tune.status, 403, origin);
     }
     assert.deepEqual(rig.writes(), []);
     const same = await rig.post("/api/rig/freq", { freqHz: 28_074_000 }, { "Content-Type": "application/json", Origin: rig.baseUrl });
