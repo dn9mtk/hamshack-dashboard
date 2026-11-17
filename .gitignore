@@ -21,3 +21,7 @@ server/data/antennas.pdf
 .DS_Store
 Thumbs.db
 *.log
+
+# Playwright E2E
+e2e-results/
+e2e-report/

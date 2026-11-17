@@ -24,9 +24,11 @@
     "test:client": "cd client && npm run build",
     "electron": "npm run build && electron .",
     "electron:dev": "electron .",
-    "electron:pack": "npm run build && npx electron-builder --win"
+    "electron:pack": "npm run build && npx electron-builder --win",
+    "test:e2e": "npm run build && playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "concurrently": "^8.2.2",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1"

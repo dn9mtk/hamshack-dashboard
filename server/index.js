@@ -69,7 +69,8 @@ async function cached(key, ttlMs, fetcher) {
 // --------------------
 // Config (persist local)
 // --------------------
-const CONFIG_PATH = path.join(DATA_DIR, "config.json");
+// HAMSHACK_CONFIG_PATH: alternative config file (used by E2E tests so real station data stays untouched)
+const CONFIG_PATH = process.env.HAMSHACK_CONFIG_PATH || path.join(DATA_DIR, "config.json");
 function readConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
