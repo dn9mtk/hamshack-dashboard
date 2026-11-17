@@ -98,7 +98,11 @@ export default function ContestsPanel() {
     const startTime = getStartTime(c);
     const h = hoursUntilStart(startTime);
     if (h == null) return filter === CONTEST_FILTER_ALL;
-    if (h < 0) return false;
+    if (h < 0) {
+      // already started: keep it while it is still running (endTime in the future)
+      const end = c.endTime ? new Date(c.endTime).getTime() : NaN;
+      return Number.isFinite(end) && end > Date.now() && filter !== CONTEST_FILTER_UPCOMING;
+    }
     if (filter === CONTEST_FILTER_NEXT) return h < 24;
     if (filter === CONTEST_FILTER_UPCOMING) return h >= 24;
     return true;

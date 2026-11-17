@@ -141,3 +141,46 @@ describe("API regression and integration", () => {
     assert(Array.isArray(body?.items));
   });
 });
+
+describe("Contest calendar (WA7BNM) description parser", async () => {
+  const { parseWa7bnmSessions, pickContestSession } = await import("../index.js");
+  const now = Date.UTC(2026, 10, 17, 8, 0); // 17 Nov 2026 08:00Z
+
+  it("parses a same-day session", () => {
+    const s = parseWa7bnmSessions("0200Z-0330Z, Nov 18", now);
+    assert.equal(s.length, 1);
+    assert.equal(s[0].start.toISOString(), "2026-11-18T02:00:00.000Z");
+    assert.equal(s[0].end.toISOString(), "2026-11-18T03:30:00.000Z");
+  });
+
+  it("parses a multi-day session and 2400Z", () => {
+    const [a] = parseWa7bnmSessions("1200Z, Nov 21 to 2400Z, Nov 22", now);
+    assert.equal(a.start.toISOString(), "2026-11-21T12:00:00.000Z");
+    assert.equal(a.end.toISOString(), "2026-11-23T00:00:00.000Z");
+  });
+
+  it("picks the running or next session of a multi-session contest", () => {
+    const desc = "2300Z, Nov 14 to 0300Z, Nov 16 and 2300Z, Nov 21 to 0300Z, Nov 23";
+    const sessions = parseWa7bnmSessions(desc, now);
+    assert.equal(sessions.length, 2);
+    assert.equal(pickContestSession(sessions, now).start.toISOString(), "2026-11-21T23:00:00.000Z");
+    const running = pickContestSession(parseWa7bnmSessions("1400Z, Nov 15 to 0800Z, Nov 16 and 1400Z, Nov 17 to 0800Z, Nov 18", now), Date.UTC(2026, 10, 17, 20, 0));
+    assert.equal(running.start.toISOString(), "2026-11-17T14:00:00.000Z");
+  });
+
+  it("handles the year rollover (December view of January contests)", () => {
+    const [s] = parseWa7bnmSessions("1800Z-2000Z, Jan 3", Date.UTC(2026, 11, 28));
+    assert.equal(s.start.getUTCFullYear(), 2027);
+  });
+
+  it("returns no sessions for unknown text", () => {
+    assert.deepEqual(parseWa7bnmSessions("see website", now), []);
+  });
+
+  it("GET /api/contests uses description times, not the feed pubDate", async () => {
+    const { status, body } = await fetchJson("/api/contests");
+    assert.equal(status, 200);
+    const starts = new Set((body.items || []).map((c) => c.startTime));
+    if ((body.items || []).length > 3) assert.ok(starts.size > 1, "all contests share one start time");
+  });
+});

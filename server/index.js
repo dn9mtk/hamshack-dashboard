@@ -2935,32 +2935,54 @@ function parseRssDate(val) {
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
-/** WA7BNM description format: "0300Z-0400Z, Feb 5" or "1200Z, Feb 7 to 2400Z, Feb 8". Returns first (earliest) start as Date UTC, or null. */
-function parseWa7bnmDescriptionStart(desc) {
-  if (!desc || typeof desc !== "string") return null;
-  const monthNames = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
-  // Match HHMMZ or HHMMZ-HHMMZ followed by ", Mon DD" or " Mon DD" (and optional year later)
-  const re = new RegExp(`(\\d{4})Z(?:-\\d{4}Z)?[, ]+(${monthNames})\\s+(\\d{1,2})(?:\\s+|,|$| to )`, "gi");
-  const monthNum = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-  let match;
-  const candidates = [];
-  while ((match = re.exec(desc)) !== null) {
-    const hh = parseInt(match[1].slice(0, 2), 10);
-    const mm = parseInt(match[1].slice(2, 4), 10);
-    if (hh > 23 || mm > 59) continue;
-    const mon = monthNum[match[2].toLowerCase().slice(0, 3)];
-    if (mon === undefined) continue;
-    const day = parseInt(match[3], 10);
-    if (day < 1 || day > 31) continue;
-    const year = new Date().getUTCFullYear();
-    let d = new Date(Date.UTC(year, mon, day, hh, mm, 0, 0));
-    if (Number.isFinite(d.getTime())) {
-      if (d.getTime() < Date.now() - 7 * 24 * 60 * 60 * 1000) d = new Date(Date.UTC(year + 1, mon, day, hh, mm, 0, 0));
-      candidates.push(d.getTime());
+/**
+ * WA7BNM (contestcalendar.com) description → sessions [{ start, end }] (Date UTC), sorted by start.
+ * Formats: "0300Z-0400Z, Feb 5" | "1200Z, Feb 7 to 2400Z, Feb 8", several sessions joined by " and ".
+ * The feed has no year: dates more than ~6 months away from now are moved into the adjacent year.
+ */
+function parseWa7bnmSessions(desc, now = Date.now()) {
+  if (!desc || typeof desc !== "string") return [];
+  const MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  const HALF_YEAR = 183 * 24 * 60 * 60 * 1000;
+  const toDate = (hhmm, mon, day) => {
+    const hh = parseInt(hhmm.slice(0, 2), 10);
+    const mm = parseInt(hhmm.slice(2, 4), 10);
+    const m = MON[mon.toLowerCase().slice(0, 3)];
+    const d = parseInt(day, 10);
+    if (m === undefined || hh > 24 || mm > 59 || (hh === 24 && mm > 0) || d < 1 || d > 31) return null;
+    let year = new Date(now).getUTCFullYear();
+    let t = Date.UTC(year, m, d, hh, mm); // 2400Z rolls over to 00:00 of the next day
+    if (t < now - HALF_YEAR) t = Date.UTC(++year, m, d, hh, mm);
+    else if (t > now + HALF_YEAR) t = Date.UTC(--year, m, d, hh, mm);
+    return new Date(t);
+  };
+  const mon = "(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*";
+  const sameDay = new RegExp(`^(\\d{4})Z\\s*-\\s*(\\d{4})Z,?\\s+${mon}\\s+(\\d{1,2})$`, "i");
+  const multiDay = new RegExp(`^(\\d{4})Z,?\\s+${mon}\\s+(\\d{1,2})\\s+to\\s+(\\d{4})Z,?\\s+${mon}\\s+(\\d{1,2})$`, "i");
+  const sessions = [];
+  for (const part of desc.split(/\s+and\s+/i).map((x) => x.trim())) {
+    let m = part.match(sameDay);
+    if (m) {
+      const start = toDate(m[1], m[3], m[4]);
+      let end = toDate(m[2], m[3], m[4]);
+      if (start && end && end <= start) end = new Date(end.getTime() + 24 * 60 * 60 * 1000); // e.g. 2300Z-0100Z
+      if (start && end) sessions.push({ start, end });
+      continue;
+    }
+    m = part.match(multiDay);
+    if (m) {
+      const start = toDate(m[1], m[2], m[3]);
+      const end = toDate(m[4], m[5], m[6]);
+      if (start && end && end > start) sessions.push({ start, end });
     }
   }
-  if (candidates.length === 0) return null;
-  return new Date(Math.min(...candidates));
+  return sessions.sort((a, b) => a.start - b.start);
+}
+
+/** Session that is running now, otherwise the next one, otherwise the last one. */
+function pickContestSession(sessions, now = Date.now()) {
+  if (!sessions.length) return null;
+  return sessions.find((s) => s.end.getTime() > now) || sessions[sessions.length - 1];
 }
 
 /** Datum aus beliebigem Text ziehen (Titel/Beschreibung), z. B. "2024-02-04", "4.2.2024", "Feb 4 2024". */
@@ -3043,17 +3065,21 @@ function parseContestsFromRss(xml) {
     let link = null;
     if (typeof rawLink === "string") link = rawLink;
     else if (rawLink && typeof rawLink === "object") link = rawLink["#text"] ?? rawLink["@_href"] ?? rawLink.href ?? (Array.isArray(rawLink) ? (rawLink[0]?.["@_href"] ?? rawLink[0]?.href) : null);
-    const rawPub = it.pubDate ?? it.PubDate ?? it.pubdate ?? it["dc:date"] ?? it.dcDate ?? it.date ?? it.published ?? it.updated;
-    let pubDate = parseRssDate(rawPub);
-    if (!pubDate && typeof rawPub === "object" && rawPub !== null) {
-      pubDate = parseRssDate(rawPub["#text"] ?? rawPub._ ?? rawPub.value);
-    }
-    if (!pubDate) pubDate = findDateInItem(it);
     const rawDesc = it.description ?? it.Description ?? it.summary ?? it.content ?? "";
     let desc = (typeof rawDesc === "string" ? rawDesc : rawDesc?.["#text"] ?? rawDesc?._ ?? "").trim();
     if (desc) desc = desc.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    // WA7BNM feed: no pubDate; start time is in description e.g. "0300Z-0400Z, Feb 5" or "1200Z, Feb 7 to 2400Z, Feb 8"
-    if (!pubDate && desc) pubDate = parseWa7bnmDescriptionStart(desc);
+    // WA7BNM feed: the real schedule is in the description ("0300Z-0400Z, Feb 5", "1200Z, Feb 7 to 2400Z, Feb 8").
+    // pubDate there is only the feed generation date, so the description takes precedence.
+    const session = pickContestSession(parseWa7bnmSessions(desc));
+    let pubDate = session?.start ?? null;
+    if (!pubDate) {
+      const rawPub = it.pubDate ?? it.PubDate ?? it.pubdate ?? it["dc:date"] ?? it.dcDate ?? it.date ?? it.published ?? it.updated;
+      pubDate = parseRssDate(rawPub);
+      if (!pubDate && typeof rawPub === "object" && rawPub !== null) {
+        pubDate = parseRssDate(rawPub["#text"] ?? rawPub._ ?? rawPub.value);
+      }
+      if (!pubDate) pubDate = findDateInItem(it);
+    }
     if (!pubDate && title) pubDate = parseDateFromText(title);
     if (!pubDate && desc) pubDate = parseDateFromText(desc);
     const type = /SSB|CW|Mixed|Digital|FM/i.test(desc) ? (desc.match(/(SSB|CW|Mixed|Digital|FM)/i)?.[1] || "Mixed") : "Mixed";
@@ -3061,7 +3087,7 @@ function parseContestsFromRss(xml) {
       name: title,
       type,
       startTime: pubDate ? pubDate.toISOString() : null,
-      endTime: null,
+      endTime: session?.end ? session.end.toISOString() : null,
       url: link,
       status: "upcoming"
     });
@@ -4261,7 +4287,7 @@ if (fs.existsSync(clientBuildPath)) {
   });
 }
 
-export { app, PORT };
+export { app, PORT, parseWa7bnmSessions, pickContestSession };
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
 if (isMain) {
