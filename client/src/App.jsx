@@ -31,6 +31,7 @@ import RangePanel from "./components/RangePanel.jsx";
 import ChatAssistant from "./components/ChatAssistant.jsx";
 import HelpOverlay from "./components/HelpOverlay.jsx";
 import { loadRigFreq, saveRigFreq } from "./lib/rigFreqStorage.js";
+import { liveRigFreqMHz, useRigStatus } from "./lib/useRigStatus.js";
 import { gridCenter } from "./lib/grid.js";
 
 function horizonKm(h1, h2) {
@@ -99,6 +100,9 @@ export default function App() {
   const [sunData, setSunData] = useState(null);
   const [sidebarTab, setSidebarTab] = useState(getInitialTab);
   const [rigFreq, setRigFreq] = useState(loadRigFreq);
+  const { status: rigStatus, setStatus: setRigStatus } = useRigStatus();
+  // Live rig frequency wins over the manual value; only the manual value is stored
+  const effectiveFreq = liveRigFreqMHz(rigStatus) ?? rigFreq;
   const [radioHorizon, setRadioHorizon] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -229,6 +233,8 @@ export default function App() {
           <RigDisplay
             freqValue={rigFreq}
             onFreqChange={handleRigFreqChange}
+            rig={rigStatus}
+            onRigUpdate={setRigStatus}
           />
         </div>
         <div className="topbar-actions">
@@ -405,7 +411,7 @@ export default function App() {
                 <h2>Range</h2>
                 <RangePanel
                   locator={config.locator}
-                  rigFreq={rigFreq}
+                  rigFreq={effectiveFreq}
                   antennaHeight={config.antennaHeight != null && config.antennaHeight !== "" ? Number(config.antennaHeight) : getAntennaHeight()}
                   onHorizonChange={setRadioHorizon}
                 />

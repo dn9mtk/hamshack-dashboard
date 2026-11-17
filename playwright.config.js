@@ -3,12 +3,16 @@
 // - copy of server/data/config.json in the temp dir, so Settings tests never touch real station data
 // - DX cluster / RBN pointed at a closed local port, so the test server does not open a second
 //   cluster login with the real callsign
+// - rig control enabled against a fake rigctld on its own loopback port (never a real rig)
 import { defineConfig, devices } from "@playwright/test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const PORT = Number(process.env.E2E_PORT || 8799);
+const RIG_PORT = Number(process.env.E2E_RIG_PORT || 8797);
+const RIG_CONTROL_PORT = Number(process.env.E2E_RIG_CONTROL_PORT || 8798);
+export const E2E_RIG_CONTROL_URL = `http://127.0.0.1:${RIG_CONTROL_PORT}`;
 const realConfig = path.resolve("server/data/config.json");
 export const E2E_CONFIG_PATH = path.join(os.tmpdir(), "hamshack-e2e-config.json");
 
@@ -34,20 +38,40 @@ export default defineConfig({
     screenshot: "only-on-failure"
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } } }],
-  webServer: {
-    command: "node server/index.js",
-    url: `http://127.0.0.1:${PORT}/api/health`,
-    reuseExistingServer: false,
-    timeout: 60_000,
-    stdout: "ignore",
-    stderr: "pipe",
-    env: {
-      PORT: String(PORT),
-      HAMSHACK_CONFIG_PATH: E2E_CONFIG_PATH,
-      DXCLUSTER_HOST: "127.0.0.1",
-      DXCLUSTER_PORT: "9",
-      RBN_HOST: "127.0.0.1",
-      RBN_PORT: "9"
+  webServer: [
+    {
+      command: "node e2e/support/fake-rigctld.mjs",
+      url: `${E2E_RIG_CONTROL_URL}/health`,
+      reuseExistingServer: false,
+      timeout: 15_000,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        E2E_RIG_PORT: String(RIG_PORT),
+        E2E_RIG_CONTROL_PORT: String(RIG_CONTROL_PORT)
+      }
+    },
+    {
+      command: "node server/index.js",
+      url: `http://127.0.0.1:${PORT}/api/health`,
+      reuseExistingServer: false,
+      timeout: 60_000,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        PORT: String(PORT),
+        HAMSHACK_CONFIG_PATH: E2E_CONFIG_PATH,
+        DXCLUSTER_HOST: "127.0.0.1",
+        DXCLUSTER_PORT: "9",
+        RBN_HOST: "127.0.0.1",
+        RBN_PORT: "9",
+        RIGCTLD_ENABLED: "true",
+        RIGCTLD_HOST: "127.0.0.1",
+        RIGCTLD_PORT: String(RIG_PORT),
+        RIGCTLD_TIMEOUT_MS: "1000",
+        RIG_POLL_MS: "500",
+        RIG_LICENCE_CLASS: "N"
+      }
     }
-  }
+  ]
 });
