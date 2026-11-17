@@ -15,10 +15,11 @@ import { resolveLicenceClass, validateFrequency } from "../rig/bands.js";
 import { MODE_LABELS, hamlibModeForLabel, labelForHamlibMode } from "../rig/modes.js";
 import * as rigctld from "../rig/rigctld.js";
 import { createRigService, registerRigRoutes } from "../rig/service.js";
-import { buildRigctldLaunchAgent } from "../rig/launchAgent.js";
+import { LAUNCH_AGENT_DEFAULTS, buildRigctldLaunchAgent } from "../rig/launchAgent.js";
 
 const { RigctldClient, isAllowedCommand, writeAllowedCommand } = rigctld;
 const RIG_DIR = fileURLToPath(new URL("../rig/", import.meta.url));
+const SERVER_DIR = fileURLToPath(new URL("../", import.meta.url));
 const LAUNCH_AGENT_SCRIPT = fileURLToPath(new URL("../scripts/rigctldLaunchAgent.js", import.meta.url));
 const READ_COMMANDS = ["+\\get_freq", "+\\get_mode", "+\\get_ptt", "+\\get_level STRENGTH"];
 const SYNTHETIC_DEVICE = "/dev/cu.usbserial-ABCD12340";
@@ -480,17 +481,28 @@ describe("rigctld LaunchAgent generator", () => {
     return [...array.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]);
   }
 
-  it("binds rigctld to 127.0.0.1 with 9600 8N1, no handshake, RTS/DTR off and no power control", () => {
+  const serialSettings = (stopBits) =>
+    `serial_handshake=None,stop_bits=${stopBits},data_bits=8,serial_parity=None,rts_state=OFF,dtr_state=OFF,auto_power_on=0,auto_power_off=0,multicast_data_addr=0.0.0.0,multicast_cmd_addr=0.0.0.0`;
+
+  it("binds rigctld to 127.0.0.1 with 9600 8N2, no handshake, RTS/DTR off and no power control", () => {
     const plist = buildRigctldLaunchAgent(options);
     assert.deepEqual(programArguments(plist), [
       "/opt/homebrew/bin/rigctld", "-m", "1035", "-r", SYNTHETIC_DEVICE, "-s", "9600", "-T", "127.0.0.1", "-t", "14532", "-C",
-      "serial_handshake=None,stop_bits=1,data_bits=8,serial_parity=None,rts_state=OFF,dtr_state=OFF,auto_power_on=0,auto_power_off=0,multicast_data_addr=0.0.0.0,multicast_cmd_addr=0.0.0.0"
+      serialSettings(2)
     ]);
+    assert.equal(LAUNCH_AGENT_DEFAULTS.stopBits, 2);
     assert.match(plist, /<key>Label<\/key>\s*<string>de\.example\.rigctld<\/string>/);
     assert.match(plist, /<key>RunAtLoad<\/key>\s*<true\/>/);
     assert.match(plist, /<key>PathState<\/key>\s*<dict>\s*<key>\/dev\/cu\.usbserial-ABCD12340<\/key>\s*<true\/>/);
     assert.match(plist, /<key>ThrottleInterval<\/key>\s*<integer>30<\/integer>/);
     assert.match(plist, /<key>StandardErrorPath<\/key>\s*<string>\/Users\/example\/Library\/Logs\/rigctld\.log<\/string>/);
+  });
+
+  it("takes 1 stop bit only when asked and leaves the other serial settings alone", () => {
+    for (const stopBits of [1, "1"]) {
+      assert.equal(programArguments(buildRigctldLaunchAgent({ ...options, stopBits })).at(-1), serialSettings(1), String(stopBits));
+    }
+    assert.equal(programArguments(buildRigctldLaunchAgent({ ...options, stopBits: "2" })).at(-1), serialSettings(2));
   });
 
   it("refuses unsafe devices, ports and settings", () => {
@@ -505,6 +517,10 @@ describe("rigctld LaunchAgent generator", () => {
       { port: 70000 },
       { port: "abc" },
       { baud: 115200 },
+      { stopBits: 0 },
+      { stopBits: 3 },
+      { stopBits: 1.5 },
+      { stopBits: "abc" },
       { model: 0 },
       { bin: "rigctld" },
       { label: "rigctld" },
@@ -528,6 +544,7 @@ describe("rigctld LaunchAgent generator", () => {
       RIGCTLD_DEVICE: SYNTHETIC_DEVICE,
       RIGCTLD_BAUD: "9600",
       RIGCTLD_PORT: "14532",
+      RIGCTLD_STOP_BITS: "2",
       RIGCTLD_LAUNCHAGENT_LABEL: "de.example.rigctld"
     };
     const run = (...args) => spawnSync(process.execPath, [LAUNCH_AGENT_SCRIPT, ...args], { env, encoding: "utf8" });
@@ -536,6 +553,7 @@ describe("rigctld LaunchAgent generator", () => {
     const printed = run();
     assert.equal(printed.status, 0);
     assert.ok(printed.stdout.includes("<string>127.0.0.1</string>"));
+    assert.ok(printed.stdout.includes(`<string>${serialSettings(2)}</string>`));
     assert.ok(!fs.existsSync(target));
 
     assert.equal(run("--write").status, 0);
@@ -543,6 +561,38 @@ describe("rigctld LaunchAgent generator", () => {
     assert.equal(run("--write").status, 1, "overwrote without --force");
     assert.equal(run("--write", "--force").status, 0);
     assert.equal(run("--bogus").status, 2);
+
+    env.RIGCTLD_STOP_BITS = "1";
+    assert.ok(run().stdout.includes(`<string>${serialSettings(1)}</string>`));
+    env.RIGCTLD_STOP_BITS = "3";
+    const refused = run();
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /RIGCTLD_STOP_BITS/);
+  });
+
+  it("the preview prints only the plist, so it can be redirected into a file", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hamshack-rig-preview-"));
+    cleanups.push(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    const server = path.join(tmp, "server");
+    for (const file of ["package.json", "loadEnv.js", "rig/launchAgent.js", "scripts/rigctldLaunchAgent.js"]) {
+      fs.mkdirSync(path.dirname(path.join(server, file)), { recursive: true });
+      fs.copyFileSync(path.join(SERVER_DIR, file), path.join(server, file));
+    }
+    fs.writeFileSync(path.join(server, ".env"), `RIGCTLD_DEVICE=${SYNTHETIC_DEVICE}\nRIGCTLD_PORT=14532\n`);
+    const result = spawnSync(process.execPath, [path.join(server, "scripts", "rigctldLaunchAgent.js")], {
+      env: { PATH: process.env.PATH, HOME: tmp },
+      encoding: "utf8"
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const expected = buildRigctldLaunchAgent({
+      ...LAUNCH_AGENT_DEFAULTS,
+      device: SYNTHETIC_DEVICE,
+      port: 14532,
+      logPath: path.join(tmp, "Library", "Logs", "rigctld.log")
+    });
+    assert.equal(result.stdout, expected);
+    assert.ok(result.stdout.startsWith("<?xml") && result.stdout.endsWith("</plist>\n"));
+    assert.ok(!/Loaded \.env/.test(result.stderr), result.stderr);
   });
 
   it("the script refuses the Standard port", () => {

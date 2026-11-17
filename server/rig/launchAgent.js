@@ -4,15 +4,18 @@ export const LAUNCH_AGENT_DEFAULTS = {
   bin: "/opt/homebrew/bin/rigctld",
   model: 1035,
   baud: 9600,
+  stopBits: 2,
   port: 4532,
   label: "de.dn9mtk.rigctld"
 };
 
 const FT991A_BAUD_RATES = [4800, 9600, 19200, 38400];
+// The FT-991A answers CAT only with 2 stop bits (hamlib model 1035 defaults to 8N2)
+const STOP_BITS = [1, 2];
 
-const SERIAL_SETTINGS = [
+const serialSettings = (stopBits) => [
   "serial_handshake=None",
-  "stop_bits=1",
+  `stop_bits=${stopBits}`,
   "data_bits=8",
   "serial_parity=None",
   "rts_state=OFF",
@@ -34,7 +37,7 @@ function toInt(value, name) {
 }
 
 /** Validate the generator settings; throws with a readable message. */
-export function validateLaunchAgentOptions({ bin, model, device, baud, port, label, logPath }) {
+export function validateLaunchAgentOptions({ bin, model, device, baud, stopBits = LAUNCH_AGENT_DEFAULTS.stopBits, port, label, logPath }) {
   if (!bin || !bin.startsWith("/")) throw new Error("RIGCTLD_BIN must be an absolute path to rigctld");
   if (!device) throw new Error("RIGCTLD_DEVICE is not set (e.g. /dev/cu.usbserial-XXXXXXXX0)");
   if (!/^\/dev\/cu\.[A-Za-z0-9._-]+$/.test(device)) {
@@ -47,17 +50,19 @@ export function validateLaunchAgentOptions({ bin, model, device, baud, port, lab
   if (modelNumber < 1) throw new Error("RIGCTLD_MODEL must be a positive hamlib model number");
   const baudRate = toInt(baud, "RIGCTLD_BAUD");
   if (!FT991A_BAUD_RATES.includes(baudRate)) throw new Error(`RIGCTLD_BAUD must be one of ${FT991A_BAUD_RATES.join(", ")}`);
+  const stopBitCount = toInt(stopBits, "RIGCTLD_STOP_BITS");
+  if (!STOP_BITS.includes(stopBitCount)) throw new Error(`RIGCTLD_STOP_BITS must be one of ${STOP_BITS.join(", ")}`);
   const tcpPort = toInt(port, "RIGCTLD_PORT");
   if (tcpPort < 1024 || tcpPort > 65535) throw new Error("RIGCTLD_PORT must be between 1024 and 65535");
   if (!/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(label || "")) {
     throw new Error("RIGCTLD_LAUNCHAGENT_LABEL must be a reverse-DNS name like de.example.rigctld");
   }
   if (!logPath || !logPath.startsWith("/")) throw new Error("The log path must be absolute");
-  return { bin, model: modelNumber, device, baud: baudRate, port: tcpPort, label, logPath };
+  return { bin, model: modelNumber, device, baud: baudRate, stopBits: stopBitCount, port: tcpPort, label, logPath };
 }
 
-export function rigctldArguments({ bin, model, device, baud, port }) {
-  return [bin, "-m", String(model), "-r", device, "-s", String(baud), "-T", "127.0.0.1", "-t", String(port), "-C", SERIAL_SETTINGS];
+export function rigctldArguments({ bin, model, device, baud, stopBits, port }) {
+  return [bin, "-m", String(model), "-r", device, "-s", String(baud), "-T", "127.0.0.1", "-t", String(port), "-C", serialSettings(stopBits)];
 }
 
 /** Build the plist XML. Pure: does not touch the file system or launchctl. */

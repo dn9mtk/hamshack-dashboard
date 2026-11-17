@@ -10,8 +10,8 @@ import { loadEnv } from "../loadEnv.js";
 import { LAUNCH_AGENT_DEFAULTS, buildRigctldLaunchAgent } from "../rig/launchAgent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// stdout carries only the plist
-loadEnv(path.join(__dirname, "..", ".env"), { log: (message) => console.error(message) });
+// stdout carries only the plist, so it can be redirected into a file
+loadEnv(path.join(__dirname, "..", ".env"), { log: () => {} });
 
 const args = new Set(process.argv.slice(2));
 const unknown = [...args].filter((a) => a !== "--write" && a !== "--force");
@@ -29,6 +29,7 @@ try {
     model: env.RIGCTLD_MODEL || LAUNCH_AGENT_DEFAULTS.model,
     device: env.RIGCTLD_DEVICE,
     baud: env.RIGCTLD_BAUD || LAUNCH_AGENT_DEFAULTS.baud,
+    stopBits: env.RIGCTLD_STOP_BITS || LAUNCH_AGENT_DEFAULTS.stopBits,
     port: env.RIGCTLD_PORT || LAUNCH_AGENT_DEFAULTS.port,
     label,
     logPath: path.join(os.homedir(), "Library", "Logs", "rigctld.log")
