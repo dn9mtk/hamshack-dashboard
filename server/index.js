@@ -89,9 +89,102 @@ function writeConfig(cfg) {
 }
 let CONFIG = readConfig();
 
+// --------------------
+// Map tiles (proxied, so provider keys never reach the browser)
+// --------------------
+// Precedence: MAP_TILE_URL (custom template) > CARTO_API_KEY (CARTO Positron) > OpenStreetMap
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const CARTO_ATTRIBUTION = `${OSM_ATTRIBUTION} &copy; <a href="https://carto.com/attributions">CARTO</a>`;
+const TILE_USER_AGENT = "HamshackDashboard/1.0 (+https://github.com/hamshack-dashboard)";
+const TILE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const TILE_CACHE_MAX = 2000;
+const TILE_MAX_ZOOM = 19;
+
+function hasTilePlaceholders(template) {
+  return ["{z}", "{x}", "{y}"].every((p) => template.includes(p));
+}
+
+/** Pick the tile provider from environment variables. Returns { provider, upstream, attribution }. */
+function resolveMapTiles(env) {
+  const customUrl = (env.MAP_TILE_URL || "").trim();
+  if (customUrl && hasTilePlaceholders(customUrl)) {
+    return {
+      provider: "custom",
+      upstream: customUrl,
+      attribution: (env.MAP_TILE_ATTRIBUTION || "").trim() || OSM_ATTRIBUTION
+    };
+  }
+  const cartoKey = (env.CARTO_API_KEY || "").trim();
+  if (cartoKey) {
+    return {
+      provider: "carto",
+      upstream: `https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png?key=${encodeURIComponent(cartoKey)}`,
+      attribution: CARTO_ATTRIBUTION
+    };
+  }
+  return { provider: "osm", upstream: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: OSM_ATTRIBUTION };
+}
+
+const MAP_TILES = resolveMapTiles(process.env);
+if ((process.env.MAP_TILE_URL || "").trim() && MAP_TILES.provider !== "custom") {
+  console.warn("Warning: MAP_TILE_URL needs {z}, {x} and {y} placeholders – ignoring it");
+}
+console.log(`✓ Map tiles: ${MAP_TILES.provider}`);
+
+const tileCache = new Map();
+function getCachedTile(key) {
+  const hit = tileCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.t > TILE_CACHE_TTL_MS) {
+    tileCache.delete(key);
+    return null;
+  }
+  return hit;
+}
+function putCachedTile(key, tile) {
+  if (tileCache.size >= TILE_CACHE_MAX) tileCache.delete(tileCache.keys().next().value);
+  const entry = { ...tile, t: Date.now() };
+  tileCache.set(key, entry);
+  return entry;
+}
+
+function parseTileCoords({ z, x, y }) {
+  if (![z, x, y].every((v) => /^\d{1,7}$/.test(v))) return null;
+  const [zi, xi, yi] = [z, x, y].map(Number);
+  const size = 2 ** zi;
+  if (zi > TILE_MAX_ZOOM || xi >= size || yi >= size) return null;
+  return { z: zi, x: xi, y: yi };
+}
+
+// Errors are never logged or returned: fetch error messages contain the upstream URL incl. key
+app.get("/api/tiles/:z/:x/:y.png", async (req, res) => {
+  const coords = parseTileCoords(req.params);
+  if (!coords) return res.status(400).json({ error: "invalid_tile" });
+  const key = `${coords.z}/${coords.x}/${coords.y}`;
+  let tile = getCachedTile(key);
+  if (!tile) {
+    try {
+      const url = MAP_TILES.upstream.replace("{z}", coords.z).replace("{x}", coords.x).replace("{y}", coords.y);
+      const r = await fetch(url, { headers: { "User-Agent": TILE_USER_AGENT }, signal: AbortSignal.timeout(10000) });
+      const contentType = r.headers.get("content-type") || "";
+      if (!r.ok || !contentType.startsWith("image/")) return res.status(502).json({ error: "tile_fetch_failed" });
+      tile = putCachedTile(key, { contentType, body: Buffer.from(await r.arrayBuffer()) });
+    } catch {
+      return res.status(502).json({ error: "tile_fetch_failed" });
+    }
+  }
+  res.set({
+    "Content-Type": tile.contentType,
+    "Cache-Control": "public, max-age=86400",
+    "X-Tile-Provider": MAP_TILES.provider
+  });
+  res.send(tile.body);
+});
+
 app.get("/api/config", (req, res) => {
   res.json({
     ...CONFIG,
+    mapTiles: { provider: MAP_TILES.provider, attribution: MAP_TILES.attribution },
     // Show environment status (without exposing sensitive values)
     dxcluster: {
       configured: !!(process.env.DXCLUSTER_HOST && process.env.DXCLUSTER_PORT),
@@ -4288,7 +4381,7 @@ if (fs.existsSync(clientBuildPath)) {
   });
 }
 
-export { app, PORT, parseWa7bnmSessions, pickContestSession };
+export { app, PORT, parseWa7bnmSessions, pickContestSession, resolveMapTiles };
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
 if (isMain) {

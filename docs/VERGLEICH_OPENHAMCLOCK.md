@@ -19,7 +19,7 @@ Vergleich basierend auf dem [OpenHamClock-Repository](https://github.com/accius/
 
 | Feature | Hamshack Dashboard | OpenHamClock |
 |---------|-------------------|--------------|
-| Basis-Karte | CARTO (light), keine Kartenwahl | Tile-Style abhängig vom Theme (dark/light) |
+| Basis-Karte | OpenStreetMap; CARTO (light) oder eigener Tile-Server per server/.env, keine Kartenwahl in der UI | Tile-Style abhängig vom Theme (dark/light) |
 | **Eigene Station (DE)** | Über Config (Locator), nicht als Marker auf der Karte | Deutlich sichtbarer DE-Marker mit Callsign |
 | **DX-Cluster auf Karte** | Ja: Verbindungslinien Spotter→DX + Callsign-Labels (blau/orange nach Quelle) | Ja: farbige Kreise pro Band, Great-Circle-Pfade **von DE zu jedem DX** |
 | **Pfade** | Spotter → gespotteter DX (wer hat wen gemeldet) | DE → DX (von deinem QTH zum DX) |

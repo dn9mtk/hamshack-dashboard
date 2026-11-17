@@ -35,6 +35,7 @@ const XOTA_SIGS = [
   { sig: "WCA", label: "COTA", url: "https://www.cotapa.org" }
 ];
 const BEACONS_LAYER_KEY = "hamshack_beacons_layer";
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const SATELLITES_LAYER_KEY = "hamshack_satellites_layer";
 const REPEATERS_LAYER_KEY = "hamshack_repeaters_layer";
 const APRS_LAYER_KEY = "hamshack_aprs_layer";
@@ -353,6 +354,7 @@ export default function MapPanel({
   focusedRepeater,
   radioHorizon = null,
   antennaHeight = 11,
+  tileAttribution,
   aircraftRadiusKm = 12,
   earthquakeMag = "2.5",
   earthquakePeriod = "week"
@@ -1432,8 +1434,7 @@ export default function MapPanel({
         maxBoundsViscosity: 1
       }).setView([25, 0], 2);
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap contributors © CARTO",
+      L.tileLayer("/api/tiles/{z}/{x}/{y}.png", {
         noWrap: true,
         maxZoom: 19,
         maxNativeZoom: 19
@@ -1658,6 +1659,15 @@ export default function MapPanel({
       if (typeof cleanup === "function") cleanup();
     };
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const control = map.attributionControl;
+    const attribution = tileAttribution || OSM_ATTRIBUTION;
+    control.addAttribution(attribution);
+    return () => control.removeAttribution(attribution);
+  }, [tileAttribution, mapReady]);
 
   // MUF data layer – when View is "MUF" (dxview-style)
   useEffect(() => {

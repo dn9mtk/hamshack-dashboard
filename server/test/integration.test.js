@@ -184,3 +184,131 @@ describe("Contest calendar (WA7BNM) description parser", async () => {
     if ((body.items || []).length > 3) assert.ok(starts.size > 1, "all contests share one start time");
   });
 });
+
+describe("Map tiles", async () => {
+  const { resolveMapTiles } = await import("../index.js");
+  const SYNTHETIC_KEY = "SYNTHETIC123";
+
+  it("falls back to OpenStreetMap without tile variables", () => {
+    const tiles = resolveMapTiles({});
+    assert.equal(tiles.provider, "osm");
+    assert.equal(tiles.upstream, "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+    assert.match(tiles.attribution, /OpenStreetMap<\/a> contributors/);
+    assert.match(tiles.attribution, /openstreetmap\.org\/copyright/);
+  });
+
+  it("ignores empty or blank values", () => {
+    assert.equal(resolveMapTiles({ CARTO_API_KEY: "", MAP_TILE_URL: "  " }).provider, "osm");
+  });
+
+  it("uses CARTO with the key in the upstream URL and CARTO attribution", () => {
+    const tiles = resolveMapTiles({ CARTO_API_KEY: SYNTHETIC_KEY });
+    assert.equal(tiles.provider, "carto");
+    assert.equal(tiles.upstream, `https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png?key=${SYNTHETIC_KEY}`);
+    assert.match(tiles.attribution, /OpenStreetMap<\/a> contributors/);
+    assert.match(tiles.attribution, /CARTO/);
+    assert.ok(!tiles.attribution.includes(SYNTHETIC_KEY));
+  });
+
+  it("prefers MAP_TILE_URL over CARTO_API_KEY", () => {
+    const url = "https://tiles.example.com/{z}/{x}/{y}.png?key=abc";
+    const tiles = resolveMapTiles({ MAP_TILE_URL: url, CARTO_API_KEY: SYNTHETIC_KEY, MAP_TILE_ATTRIBUTION: "&copy; Example" });
+    assert.equal(tiles.provider, "custom");
+    assert.equal(tiles.upstream, url);
+    assert.equal(tiles.attribution, "&copy; Example");
+  });
+
+  it("uses OpenStreetMap attribution for MAP_TILE_URL without MAP_TILE_ATTRIBUTION", () => {
+    const tiles = resolveMapTiles({ MAP_TILE_URL: "https://tiles.example.com/{z}/{x}/{y}.png" });
+    assert.equal(tiles.provider, "custom");
+    assert.match(tiles.attribution, /OpenStreetMap<\/a> contributors/);
+  });
+
+  it("ignores MAP_TILE_ATTRIBUTION without MAP_TILE_URL", () => {
+    assert.match(resolveMapTiles({ MAP_TILE_ATTRIBUTION: "&copy; Example" }).attribution, /OpenStreetMap/);
+  });
+
+  it("falls back when MAP_TILE_URL lacks placeholders", () => {
+    assert.equal(resolveMapTiles({ MAP_TILE_URL: "https://tiles.example.com/tile.png" }).provider, "osm");
+    assert.equal(resolveMapTiles({ MAP_TILE_URL: "https://tiles.example.com/{z}/{x}.png", CARTO_API_KEY: SYNTHETIC_KEY }).provider, "carto");
+  });
+
+  it("GET /api/config exposes provider and attribution but no tile URL or key", async () => {
+    const r = await fetch(`${baseUrl}/api/config`);
+    const text = await r.text();
+    const { mapTiles } = JSON.parse(text);
+    assert.ok(["osm", "carto", "custom"].includes(mapTiles?.provider), "mapTiles.provider missing or unknown");
+    assert.ok(typeof mapTiles?.attribution === "string" && mapTiles.attribution.length > 0, "mapTiles.attribution missing");
+    assert.ok(!("upstream" in mapTiles), "mapTiles exposes the upstream URL");
+    // assert.ok only: a failing match must not print the response (it could contain a key)
+    assert.ok(!text.includes("key="), "config response contains a key parameter");
+    assert.ok(!text.includes("cartocdn"), "config response contains the CARTO tile host");
+    assert.ok(!text.includes("tile.openstreetmap"), "config response contains the OSM tile host");
+  });
+
+  it("GET /api/tiles rejects invalid tile coordinates", async () => {
+    for (const path of ["/api/tiles/2/4/0.png", "/api/tiles/2/0/4.png", "/api/tiles/20/0/0.png", "/api/tiles/a/0/0.png", "/api/tiles/1/-1/0.png"]) {
+      const { status, body } = await fetchJson(path);
+      assert.equal(status, 400, path);
+      assert.equal(body?.error, "invalid_tile", path);
+    }
+  });
+});
+
+describe("Map tile proxy errors", async () => {
+  const { spawn } = await import("node:child_process");
+  const net = await import("node:net");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const SYNTHETIC_KEY = "SYNTHETIC123";
+
+  async function freePort() {
+    const probe = net.createServer();
+    await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address();
+    await new Promise((resolve) => probe.close(resolve));
+    return port;
+  }
+
+  async function waitFor(condition, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  // MAP_TILES is resolved at module load, so the failing upstream needs its own server process
+  it("answers 502 without the upstream URL or key in body or log", async () => {
+    const port = await freePort();
+    const child = spawn(process.execPath, [fileURLToPath(new URL("../index.js", import.meta.url))], {
+      env: {
+        ...process.env,
+        PORT: String(port),
+        MAP_TILE_URL: `http://127.0.0.1:9/{z}/{x}/{y}.png?key=${SYNTHETIC_KEY}`,
+        HAMSHACK_CONFIG_PATH: path.join(os.tmpdir(), "hamshack-tile-test-missing-config.json"),
+        DXCLUSTER_HOST: "127.0.0.1",
+        DXCLUSTER_PORT: "9",
+        RBN_HOST: "127.0.0.1",
+        RBN_PORT: "9"
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let log = "";
+    child.stdout.on("data", (chunk) => (log += chunk));
+    child.stderr.on("data", (chunk) => (log += chunk));
+    try {
+      await waitFor(() => log.includes("Server running"), 15_000);
+      assert.ok(log.includes("Map tiles: custom"), "test server did not pick up MAP_TILE_URL");
+      const r = await fetch(`http://127.0.0.1:${port}/api/tiles/2/2/1.png`);
+      const body = await r.text();
+      assert.equal(r.status, 502);
+      assert.equal(JSON.parse(body).error, "tile_fetch_failed");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      // assert.ok only: a failing match must not print the log or body
+      assert.ok(!body.includes(SYNTHETIC_KEY), "tile error response contains the key");
+      assert.ok(!log.includes(SYNTHETIC_KEY), "server log contains the key");
+      assert.ok(!log.includes("127.0.0.1:9/"), "server log contains the upstream tile URL");
+    } finally {
+      child.kill();
+    }
+  });
+});

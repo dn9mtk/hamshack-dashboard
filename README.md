@@ -183,6 +183,29 @@ export DXCLUSTER_CALLSIGN=YOURCALL
 - `RBN_HOST` - RBN hostname
 - `RBN_PORT` - RBN port
 - `RBN_CALLSIGN` - Callsign for RBN login (defaults to config callsign)
+- `CARTO_API_KEY` - CARTO API key for the CARTO Positron base map (optional)
+- `MAP_TILE_URL` - Custom tile URL template with `{z}`, `{x}`, `{y}` (optional)
+- `MAP_TILE_ATTRIBUTION` - Attribution HTML for `MAP_TILE_URL` (optional)
+
+### Map tiles
+
+The server fetches base map tiles and serves them at `/api/tiles/{z}/{x}/{y}.png`, so provider keys never reach the browser. Tiles are cached in memory (7 days, max. 2000 tiles). The provider is chosen from `server/.env`:
+
+| Configuration | Provider | Attribution |
+|---------------|----------|-------------|
+| `MAP_TILE_URL` set (must contain `{z}`, `{x}`, `{y}`) | custom | `MAP_TILE_ATTRIBUTION` or OpenStreetMap |
+| `CARTO_API_KEY` set | CARTO Positron (`light_all`) | OpenStreetMap contributors, CARTO |
+| nothing set | OpenStreetMap Standard | OpenStreetMap contributors |
+
+```env
+# CARTO key from https://carto.com/basemaps/apikey
+CARTO_API_KEY=your_key
+# or any other provider
+MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png?key=your_key
+MAP_TILE_ATTRIBUTION=&copy; Example Tiles
+```
+
+The startup log shows the active provider (`✓ Map tiles: osm|carto|custom`), and every tile response carries an `X-Tile-Provider` header. An invalid or expired CARTO key cannot be detected: CARTO then returns normal images with an "API KEY REQUIRED" watermark. Restart the server after changing these variables.
 
 ### Popular DX Cluster Servers
 
