@@ -130,6 +130,8 @@ On the FT-991A set:
 
 Make sure no transmit keying setting of the rig uses RTS or DTR of the CAT port: some USB drivers toggle those lines briefly when a port opens.
 
+The CAT port runs at 9600 baud, 8 data bits, no parity, **2 stop bits** (8N2) – the FT-991A does not answer CAT commands sent with 1 stop bit, and hamlib's FT-991 backend (model 1035) also uses 8N2. The generated LaunchAgent sets this for rigctld.
+
 The USB cable shows up as two serial ports (Silicon Labs CP2105): the **Enhanced** port ends in `0` and carries CAT, the **Standard** port ends in `1`. Use the Enhanced port:
 
 ```bash
@@ -146,7 +148,7 @@ Add the CAT port to `server/.env` (see `.env.example`). `RIGCTLD_DEVICE` is requ
 RIGCTLD_DEVICE=/dev/cu.usbserial-XXXXXXXX0
 ```
 
-Optional generator settings: `RIGCTLD_BIN` (`/opt/homebrew/bin/rigctld`), `RIGCTLD_MODEL` (`1035`, FT-991), `RIGCTLD_BAUD` (`9600`, must match menu 031), `RIGCTLD_PORT` (`4532`), `RIGCTLD_LAUNCHAGENT_LABEL` (`de.dn9mtk.rigctld`).
+Optional generator settings: `RIGCTLD_BIN` (`/opt/homebrew/bin/rigctld`), `RIGCTLD_MODEL` (`1035`, FT-991), `RIGCTLD_BAUD` (`9600`, must match menu 031), `RIGCTLD_STOP_BITS` (`2`; `1` only for a rig that needs it), `RIGCTLD_PORT` (`4532`), `RIGCTLD_LAUNCHAGENT_LABEL` (`de.dn9mtk.rigctld`).
 
 Print the plist and review it, then write it to `~/Library/LaunchAgents`:
 
@@ -155,7 +157,9 @@ npm run rig:launchagent
 npm run rig:launchagent -- --write          # add --force to overwrite an existing file
 ```
 
-The generator refuses `/dev/tty.*` devices, the Standard port (`…1`), baud rates the FT-991A does not offer (allowed: 4800, 9600, 19200, 38400) and ports outside 1024–65535. It never runs launchctl – close WSJT-X and fldigi (or switch them to rigctld first, see below), then load the agent yourself:
+The preview prints only the plist on stdout, so you can also save it and compare it with an installed one: `npm run --silent rig:launchagent > /tmp/rigctld.plist`.
+
+The generator refuses `/dev/tty.*` devices, the Standard port (`…1`), baud rates the FT-991A does not offer (allowed: 4800, 9600, 19200, 38400), stop bits other than 1 or 2 and ports outside 1024–65535. It never runs launchctl – close WSJT-X and fldigi (or switch them to rigctld first, see below), then load the agent yourself:
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.dn9mtk.rigctld.plist   # load and start
@@ -181,6 +185,8 @@ RIG_LICENCE_CLASS=N
 
 Restart the server and check `curl -s http://localhost:8788/api/rig` – `connected` should become `true` within a second or two of the first request. The dashboard only polls rigctld while a browser shows the dashboard (and stops 15 s after the last request).
 
+When you type a frequency in the dashboard, it keeps the mode shown in the header: tuning to another band makes the FT-991A recall that band's last mode (band stack), so the dashboard sets the frequency, puts the mode back if the rig changed it and corrects the frequency once if the mode change moved it (`POST /api/rig/tune`). A mode change on its own keeps the frequency in the same way.
+
 ### 4. WSJT-X and fldigi
 
 Only one program can open the serial port. Switch the other programs to rigctld:
@@ -188,15 +194,20 @@ Only one program can open the serial port. Switch the other programs to rigctld:
 - **WSJT-X:** Settings → Radio → Rig `Hamlib NET rigctl`, Network Server `127.0.0.1:4532`, PTT method `CAT`.
 - **fldigi:** Configure → Rig Control → Hamlib → Rig `Hamlib NET rigctl`, Device `127.0.0.1:4532`, then Initialize.
 
+With `Hamlib NET rigctl` the serial settings shown in WSJT-X or fldigi (baud rate, data and stop bits) are not used – rigctld owns the port and uses the settings of its LaunchAgent. Only a program that opens the CAT port directly needs 9600 8N2.
+
 ### Troubleshooting
 
 | Symptom | Cause and fix |
 |---------|---------------|
 | "Rig offline", log `rigctld is not running (connection refused)` | rigctld is not running: check `launchctl print gui/$(id -u)/de.dn9mtk.rigctld` and `~/Library/Logs/rigctld.log` |
-| `rigctld error -5` (rig did not answer) | Rig switched off, wrong port (Standard instead of Enhanced) or CAT RATE (menu 031) does not match `RIGCTLD_BAUD` |
+| `rigctld error -5` (rig did not answer) | Rig switched off, wrong port (Standard instead of Enhanced), CAT RATE (menu 031) does not match `RIGCTLD_BAUD` or rigctld runs with 1 stop bit instead of 2 (regenerate the LaunchAgent) |
 | rigctld log: port busy / resource busy | WSJT-X, fldigi or another program still opens the serial port directly |
 | `RIGCTLD_HOST must be a loopback address` in the server log | Rig control was disabled because `RIGCTLD_HOST` is not `127.x.x.x`, `::1` or `localhost` |
 | 409 "The rig is transmitting" | Changes are refused while PTT is active; wait until the transmission ends |
 | 400 "… outside the bands allowed for licence class …" | The frequency is not in the band table of `RIG_LICENCE_CLASS`; nothing was sent |
+| 502 `rig_mismatch` "The rig is on … instead of the requested …" | The rig did not end on the requested frequency and mode after one correction; the header shows where it is. Check the rig (e.g. a locked dial or a mode the band does not allow) and tune again |
+
+After a mode change the dashboard puts the previous frequency back only if it lies within the bands of `RIG_LICENCE_CLASS`; outside them (for example a receive-only frequency) the shifted frequency stays and no `set_freq` is sent.
 
 The server logs one line per state change (connected, offline, timeout), not one per failed poll; reconnect attempts back off from 1 s to 30 s.

@@ -37,8 +37,9 @@ async function postRig(path, body) {
   return r.json();
 }
 
-export function setRigFrequency(freqHz) {
-  return postRig("/api/rig/freq", { freqHz });
+/** Tune the rig; with a mode, the rig keeps that mode even when the band-stack recall would change it. */
+export function tuneRig(freqHz, mode) {
+  return postRig("/api/rig/tune", { freqHz, ...(mode ? { mode } : {}) });
 }
 
 export function setRigMode(mode) {

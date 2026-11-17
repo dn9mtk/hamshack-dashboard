@@ -111,6 +111,34 @@ test("tune frequency and mode from the dashboard, out-of-band input is refused",
   expect(await page.evaluate((key) => localStorage.getItem(key), RIG_FREQ_KEY)).toBeNull();
 });
 
+test("frequency entry keeps the shown mode across a band change", async ({ page, request }) => {
+  // FT-991A behaviour: a new band recalls its band-stack mode, a mode change shifts the frequency
+  await control(request, "/state", {
+    freqHz: 438_625_000,
+    mode: "FM",
+    bandStackModes: [
+      { lowHz: 144_000_000, highHz: 146_000_000, mode: "CW" },
+      { lowHz: 430_000_000, highHz: 440_000_000, mode: "USB" }
+    ],
+    modeChangeOffsetHz: 700
+  });
+  await page.goto("/");
+  const rig = rigDisplay(page);
+  await expect(rig.status).toHaveText("Live");
+  await expect(rig.mode).toHaveValue("FM");
+
+  await rig.freq.click();
+  await rig.input.fill("145.5");
+  await rig.input.press("Enter");
+  await expect.poll(async () => (await rigState(request)).writes).toHaveLength(3);
+  const state = await rigState(request);
+  expect([state.freqHz, state.mode]).toEqual([145_500_000, "FM"]);
+  expect(state.writes).toEqual(["+\\set_freq 145500000", "+\\set_mode FM -1", "+\\set_freq 145500000"]);
+  await expect(rig.freq).toHaveText("145.5000");
+  await expect(rig.mode).toHaveValue("FM");
+  await expect(rig.alert).toHaveCount(0);
+});
+
 test("TX badge locks the controls while the rig transmits", async ({ page, request }) => {
   await page.goto("/");
   const rig = rigDisplay(page);

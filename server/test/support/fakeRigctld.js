@@ -7,6 +7,11 @@ const MODE_READBACK = { PKTFM: "FM-D" };
 export async function startFakeRigctld({ port = 0, state: initialState = {} } = {}) {
   // partialReplyOnce: answer the next command of a connection with this text (no newline), then
   // leave that connection silent. closeOnConnect: accept connections and close them at once.
+  // failCommandOnce: answer the next command with this name (e.g. "set_mode") with RPRT -1, unchanged state.
+  // Quirks of the real FT-991A, off by default:
+  // bandStackModes: [{ lowHz, highHz, mode }] – set_freq into another band recalls that band's mode.
+  // modeChangeOffsetHz: a set_mode that changes the mode shifts the frequency by this much.
+  // setFreqErrorHz: every set_freq lands this far off the requested frequency.
   const state = {
     freqHz: 145_500_000,
     mode: "FM",
@@ -16,6 +21,10 @@ export async function startFakeRigctld({ port = 0, state: initialState = {} } = 
     silent: false,
     partialReplyOnce: null,
     closeOnConnect: false,
+    failCommandOnce: null,
+    bandStackModes: null,
+    modeChangeOffsetHz: 0,
+    setFreqErrorHz: 0,
     ...initialState
   };
   const received = [];
@@ -25,6 +34,22 @@ export async function startFakeRigctld({ port = 0, state: initialState = {} } = 
   let boundPort = port;
 
   const silentSockets = new WeakSet();
+
+  function bandStackEntry(freqHz) {
+    return state.bandStackModes?.find((entry) => freqHz >= entry.lowHz && freqHz <= entry.highHz) ?? null;
+  }
+
+  function tune(freqHz) {
+    const entry = bandStackEntry(freqHz);
+    if (entry && bandStackEntry(state.freqHz) !== entry) state.mode = entry.mode;
+    state.freqHz = freqHz + state.setFreqErrorHz;
+  }
+
+  function changeMode(token) {
+    const mode = MODE_READBACK[token] || token;
+    if (mode !== state.mode) state.freqHz += state.modeChangeOffsetHz;
+    state.mode = mode;
+  }
 
   function reply(socket, line) {
     received.push(line);
@@ -37,6 +62,11 @@ export async function startFakeRigctld({ port = 0, state: initialState = {} } = 
     }
     const [command, ...args] = line.replace(/^\+\\/, "").split(" ");
     const echo = `${command}:${args.length ? ` ${args.join(" ")}` : ""}`;
+    if (command === state.failCommandOnce) {
+      state.failCommandOnce = null;
+      socket.write(`${echo}\nRPRT -1\n`);
+      return;
+    }
     let body;
     switch (command) {
       case "get_freq":
@@ -53,12 +83,12 @@ export async function startFakeRigctld({ port = 0, state: initialState = {} } = 
         break;
       case "set_freq":
         if (/^\d+$/.test(args[0] || "")) {
-          state.freqHz = Number(args[0]);
+          tune(Number(args[0]));
           body = [];
         }
         break;
       case "set_mode":
-        state.mode = MODE_READBACK[args[0]] || args[0];
+        changeMode(args[0]);
         body = [];
         break;
       default:
