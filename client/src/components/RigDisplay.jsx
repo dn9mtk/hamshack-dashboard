@@ -5,7 +5,7 @@
  */
 import { useState, useRef, useEffect } from "react";
 import { freqToBand } from "../lib/freqToBand.js";
-import { setRigFrequency, setRigMode } from "../lib/rigApi.js";
+import { setRigMode, tuneRig } from "../lib/rigApi.js";
 import { liveRigFreqMHz } from "../lib/useRigStatus.js";
 
 function formatFreqDisplay(value) {
@@ -115,7 +115,7 @@ export default function RigDisplay({ freqValue, onFreqChange, rig, onRigUpdate }
       return;
     }
     focusAfterRequestRef.current = freqButtonRef;
-    sendToRig(() => setRigFrequency(freqHz));
+    sendToRig(() => tuneRig(freqHz, modes.includes(rig.mode) ? rig.mode : undefined));
   }
 
   function cancelEdit() {

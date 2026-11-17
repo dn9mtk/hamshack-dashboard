@@ -6,7 +6,18 @@ import { startFakeRigctld } from "../../server/test/support/fakeRigctld.js";
 
 const RIG_PORT = Number(process.env.E2E_RIG_PORT);
 const CONTROL_PORT = Number(process.env.E2E_RIG_CONTROL_PORT);
-const INITIAL_STATE = { freqHz: 28_074_000, mode: "PKTUSB", passbandHz: 3000, ptt: 0, strength: -12, silent: false };
+const INITIAL_STATE = {
+  freqHz: 28_074_000,
+  mode: "PKTUSB",
+  passbandHz: 3000,
+  ptt: 0,
+  strength: -12,
+  silent: false,
+  failCommandOnce: null,
+  bandStackModes: null,
+  modeChangeOffsetHz: 0,
+  setFreqErrorHz: 0
+};
 
 const fake = await startFakeRigctld({ port: RIG_PORT, state: { ...INITIAL_STATE } });
 
