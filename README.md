@@ -186,6 +186,7 @@ export DXCLUSTER_CALLSIGN=YOURCALL
 - `CARTO_API_KEY` - CARTO API key for the CARTO Positron base map (optional)
 - `MAP_TILE_URL` - Custom tile URL template with `{z}`, `{x}`, `{y}` (optional)
 - `MAP_TILE_ATTRIBUTION` - Attribution HTML for `MAP_TILE_URL` (optional)
+- `RIGCTLD_ENABLED`, `RIGCTLD_HOST`, `RIGCTLD_PORT`, `RIG_POLL_MS`, `RIGCTLD_TIMEOUT_MS`, `RIG_LICENCE_CLASS` - Rig control (optional, see below)
 
 ### Map tiles
 
@@ -206,6 +207,27 @@ MAP_TILE_ATTRIBUTION=&copy; Example Tiles
 ```
 
 The startup log shows the active provider (`✓ Map tiles: osm|carto|custom`), and every tile response carries an `X-Tile-Provider` header. An invalid or expired CARTO key cannot be detected: CARTO then returns normal images with an "API KEY REQUIRED" watermark. Restart the server after changing these variables.
+
+### Rig control (Yaesu FT-991A via hamlib rigctld)
+
+The header display can show and set the frequency and mode of a Yaesu FT-991A. The dashboard talks to [hamlib](https://hamlib.github.io/) `rigctld` on `127.0.0.1:4532`; rigctld owns the CAT port, so WSJT-X and fldigi can share the rig through "Hamlib NET rigctl". Rig control is **off by default**; without it the display keeps working as a manual frequency field.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RIGCTLD_ENABLED` | `false` | `true` turns rig control on |
+| `RIGCTLD_HOST` | `127.0.0.1` | rigctld host – loopback only (`127.x.x.x`, `::1`, `localhost`), anything else disables rig control |
+| `RIGCTLD_PORT` | `4532` | rigctld TCP port |
+| `RIG_POLL_MS` | `1000` | Polling interval while a dashboard is open (minimum 500) |
+| `RIGCTLD_TIMEOUT_MS` | `5000` | Timeout per rigctld command |
+| `RIG_LICENCE_CLASS` | `N` | German licence class `N`, `E` or `A`: the dashboard only tunes to the bands of this class |
+
+- **Display:** live frequency, mode, S-meter, a "Live" indicator and a TX badge. Band label and the Range panel follow the live frequency. While the rig or rigctld is offline, the display shows "Rig offline" and your last manual frequency.
+- **Control:** click the frequency, type it in MHz and press Enter to tune VFO A; pick the mode from the list. Frequencies outside the bands of `RIG_LICENCE_CLASS` are refused with a message and nothing is sent to the rig.
+- **Safety:** the server only sends `get_freq`, `get_mode`, `get_ptt`, `get_level STRENGTH`, `set_freq` and `set_mode` (allowlist checked right before the socket write). It cannot key the transmitter, switch the rig on or off, change power or send raw CAT commands. Changes are refused while the rig transmits (HTTP 409).
+- **Access:** `POST /api/rig/freq` and `POST /api/rig/mode` accept JSON only and reject requests from other web sites (Origin check). There is no PIN: anyone who can reach the dashboard on the LAN can tune the rig. Residual risk: a malicious web page could get past the Origin check through DNS rebinding; the worst it can do is retune the rig or change its mode within your licence bands – transmitting is impossible.
+- **API:** `GET /api/rig` returns `{ enabled, connected, freqHz, mode, tx, sMeterDb, updatedAt, error, licenceClass, bands, modes }`.
+
+Setting up rigctld as a LaunchAgent on macOS, the FT-991A menu settings and WSJT-X/fldigi are described in [server/SETUP.md](server/SETUP.md#rig-control-yaesu-ft-991a).
 
 ### Popular DX Cluster Servers
 
