@@ -76,6 +76,7 @@ Vergleich basierend auf dem [OpenHamClock-Repository](https://github.com/accius/
 | **Contests** | Nein | Ja (Kalender) |
 | **DXpeditions** | Nein | Ja |
 | **WSJT-X** | Nein | Ja (UDP, optional Relay für Cloud) |
+| **Rig-Steuerung (CAT)** | Ja, optional: Yaesu FT-991A über hamlib `rigctld` (Frequenz, Mode, S-Meter, TX-Anzeige; Frequenz und Mode setzen, nur in den Bändern der Lizenzklasse; kann nie senden), kein Click-to-Tune | Ja: Rig Bridge mit Plugins für viele Hersteller, flrig und rigctld, Click-to-Tune aus Spots |
 | **Solar Panel** | Nein | Ja (4 Ansichten: Sonnenbild, Indices, X-Ray, Mondphase) |
 | **DE/DX Location** | Config + Path Forecast | Eigene DE- und DX-Panels (Details, Grid, Zonen, Sun times) |
 
@@ -145,5 +146,6 @@ Vergleich basierend auf dem [OpenHamClock-Repository](https://github.com/accius/
 - **News:** optional DX-News-Ticker (z. B. DXNews) zusätzlich zu Local Ham News.  
 - **Theme/Layout:** zweites Theme (z. B. Light) oder Classic-Layout für Kiosk.  
 - **Sprachen:** i18n vorbereiten (z. B. DE/EN), Keys wie in OpenHamClock.
+- **Click-to-Tune:** Spot anklicken stimmt das Rig über die vorhandene Rig-Steuerung ab (wie die Rig Bridge in OpenHamClock).
 
 Wenn du willst, kann ich eine davon konkret im Hamshack-Code ausarbeiten (z. B. DE-Marker, DE→DX-Pfade oder erweiterte Spot-Filter).

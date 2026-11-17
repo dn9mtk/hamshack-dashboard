@@ -11,38 +11,15 @@ import * as sat from "satellite.js";
 import OpenAI from "openai";
 import { search as ddgSearch } from "duck-duck-scrape";
 import { io } from "socket.io-client";
+import { loadEnv } from "./loadEnv.js";
+import { createRigService, registerRigRoutes } from "./rig/service.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, "data");
 
 // Load environment variables from .env file (server/.env)
-try {
-  const envPath = path.join(__dirname, ".env");
-  if (fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, "utf8");
-    for (const line of envContent.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-
-      const [rawKey, ...valueParts] = trimmed.split("=");
-      const key = rawKey?.trim();
-      if (!key || valueParts.length === 0) continue;
-
-      const value = valueParts
-        .join("=")
-        .trim()
-        .replace(/^[\"']|[\"']$/g, ""); // remove surrounding quotes
-
-      if (process.env[key] == null || process.env[key] === "") {
-        process.env[key] = value;
-      }
-    }
-    console.log(`✓ Loaded .env from ${envPath}`);
-  }
-} catch (err) {
-  console.warn("Warning: Could not load .env file:", err?.message || err);
-}
+loadEnv(path.join(__dirname, ".env"));
 
 const app = express();
 app.use(cors());
@@ -4369,6 +4346,11 @@ ${fullContextDump}`;
     res.status(status).json({ error: "ai_error", message: friendly });
   }
 });
+
+// --------------------
+// Rig control via hamlib rigctld (optional, RIGCTLD_ENABLED)
+// --------------------
+registerRigRoutes(app, createRigService());
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
