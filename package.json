@@ -19,6 +19,7 @@
     "sync-repeaters": "node server/scripts/syncRepeaters.js",
     "verify-repeaters": "node server/scripts/verifyRepeaters.js",
     "extract-pdf": "node server/scripts/extractPdfToText.js",
+    "rig:launchagent": "node server/scripts/rigctldLaunchAgent.js",
     "test": "npm run test:server && npm run test:client",
     "test:server": "cd server && npm run test",
     "test:client": "cd client && npm run build",

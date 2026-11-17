@@ -3,6 +3,7 @@
  * Run from repo root: node --test server/test/integration.test.js
  * Or: npm run test (in server or root)
  */
+import "./support/rigDisabled.js";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { app } from "../index.js";
@@ -310,5 +311,24 @@ describe("Map tile proxy errors", async () => {
     } finally {
       child.kill();
     }
+  });
+});
+
+describe("Rig control (disabled)", () => {
+  it("GET /api/rig reports rig control as disabled", async () => {
+    const { status, body } = await fetchJson("/api/rig");
+    assert.equal(status, 200);
+    assert.equal(body?.enabled, false);
+    assert.equal(body?.connected, false);
+  });
+
+  it("POST /api/rig/freq answers 503 rig_disabled", async () => {
+    const { status, body } = await fetchJson("/api/rig/freq", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ freqHz: 28_074_000 })
+    });
+    assert.equal(status, 503);
+    assert.equal(body?.error, "rig_disabled");
   });
 });
