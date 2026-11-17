@@ -33,8 +33,8 @@ npm run start:server
 
 Then open in a browser:
 
-- **Same machine:** http://localhost:8787  
-- **Other devices (e.g. Raspi in LAN):** `http://<IP>:8787` (e.g. http://192.168.1.10:8787)  
+- **Same machine:** http://localhost:8788  
+- **Other devices (e.g. Raspi in LAN):** `http://<IP>:8788` (e.g. http://192.168.1.10:8788)  
 
 The server listens on all interfaces, so you can use the Pi’s IP to open the dashboard from another device.
 
@@ -110,7 +110,7 @@ npm run dev
 
 ## Development
 
-- Backend runs on: `http://localhost:8787`
+- Backend runs on: `http://localhost:8788`
 - Frontend runs on: `http://localhost:5173` (Vite default)
 
 ## Production Build
@@ -176,7 +176,7 @@ export DXCLUSTER_CALLSIGN=YOURCALL
 
 ### Available Environment Variables
 
-- `PORT` - Server port (default: 8787)
+- `PORT` - Server port (default: 8788)
 - `DXCLUSTER_HOST` - DX Cluster hostname
 - `DXCLUSTER_PORT` - DX Cluster port
 - `DXCLUSTER_CALLSIGN` - Callsign for DX Cluster login (defaults to config callsign)

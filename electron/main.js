@@ -2,7 +2,7 @@ const { app, BrowserWindow } = require("electron");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const PORT = process.env.PORT || 8787;
+const PORT = process.env.PORT || 8788;
 let serverProcess = null;
 
 function getServerPath() {

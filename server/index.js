@@ -51,7 +51,7 @@ app.use(express.json());
 // Store client build path for later use
 const clientBuildPath = path.join(__dirname, "..", "client", "dist");
 
-const PORT = process.env.PORT || 8787;
+const PORT = process.env.PORT || 8788;
 
 // --------------------
 // Cache helper

@@ -63,7 +63,7 @@ OLLAMA_MODEL=llama3.2
    ```bash
    npm run electron:dev
    ```
-   Lädt `http://localhost:8787` – Server muss vorher laufen.
+   Lädt `http://localhost:8788` – Server muss vorher laufen.
 
 ---
 
