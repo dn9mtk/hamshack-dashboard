@@ -159,7 +159,8 @@ export default function App() {
         lon: data.lon,
         elevation: data.elevation,
         antennaHeight: data.antennaHeight,
-        wantedPrefixes: data.wantedPrefixes ?? ""
+        wantedPrefixes: data.wantedPrefixes ?? "",
+        mapTiles: data.mapTiles
       }))
       .catch(() => {});
   }
@@ -513,6 +514,7 @@ export default function App() {
             focusedRepeater={focusedRepeater}
             radioHorizon={radioHorizon}
             antennaHeight={getAntennaHeight(config.antennaHeight)}
+            tileAttribution={config.mapTiles?.attribution}
             aircraftRadiusKm={aircraftRadiusKm}
             earthquakeMag={earthquakeMag}
             earthquakePeriod={earthquakePeriod}

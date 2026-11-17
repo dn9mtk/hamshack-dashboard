@@ -2,6 +2,8 @@
 // Many panels depend on external APIs. Those tests therefore check that every panel settles into a
 // defined state (content, empty state or PanelError) without JS errors — not specific data.
 import { test, expect } from "@playwright/test";
+import fs from "node:fs";
+import { E2E_CONFIG_PATH } from "../playwright.config.js";
 
 const TABS = [
   ["news", "News"], ["contests", "Contests"], ["dxpeditions", "DXped"], ["xota", "xOTA"],
@@ -42,6 +44,41 @@ test("start page shows station from config and the map", async ({ page, request 
   await expect(page.locator(".leaflet-container")).toBeVisible();
   await expect(page.locator(".leaflet-tile-loaded").first()).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('[role="tab"]')).toHaveCount(TABS.length);
+});
+
+test("map tiles come through /api/tiles with provider attribution", async ({ page, request }) => {
+  const { mapTiles } = await (await request.get("/api/config")).json();
+  expect(["osm", "carto", "custom"]).toContain(mapTiles?.provider);
+  const tileResponse = page.waitForResponse((r) => r.url().includes("/api/tiles/") && r.status() === 200);
+  await page.goto("/");
+  expect((await tileResponse).headers()["x-tile-provider"]).toBe(mapTiles.provider);
+  const tile = page.locator(".leaflet-tile-loaded").first();
+  await expect(tile).toBeVisible({ timeout: 30_000 });
+  await expect(tile).toHaveAttribute("src", /\/api\/tiles\/\d+\/\d+\/\d+\.png$/);
+  await expect(page.locator("img.leaflet-tile:not([src*='/api/tiles/'])")).toHaveCount(0);
+  const attribution = page.locator(".leaflet-control-attribution");
+  if (mapTiles.provider !== "custom") {
+    await expect(attribution).toContainText("OpenStreetMap contributors");
+    await expect(attribution.locator("a[href='https://www.openstreetmap.org/copyright']")).toHaveCount(1);
+  }
+  if (mapTiles.provider === "carto") await expect(attribution).toContainText("CARTO");
+});
+
+test("tile settings cannot be written through POST /api/config", async ({ request }) => {
+  const original = await (await request.get("/api/config")).json();
+  const synthetic = "SYNTHETIC123";
+  const r = await request.post("/api/config", {
+    data: {
+      qthName: original.qthName,
+      mapTiles: { provider: "custom", attribution: synthetic },
+      MAP_TILE_URL: `http://127.0.0.1:9/{z}/{x}/{y}.png?key=${synthetic}`,
+      CARTO_API_KEY: synthetic
+    }
+  });
+  expect(r.ok()).toBeTruthy();
+  expect(await r.text()).not.toContain(synthetic);
+  expect((await (await request.get("/api/config")).json()).mapTiles).toEqual(original.mapTiles);
+  expect(fs.readFileSync(E2E_CONFIG_PATH, "utf8")).not.toContain(synthetic);
 });
 
 test("every sidebar tab renders a panel that settles", async ({ page }) => {
