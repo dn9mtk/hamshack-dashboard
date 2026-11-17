@@ -2755,7 +2755,7 @@ app.get("/api/weather/current", async (req, res) => {
 // PSK Reporter (reception reports for your callsign)
 // https://pskreporter.info/pskdev - query: senderCallsign = where your signal was heard
 // --------------------
-const xmlParser = new XMLParser({ ignoreAttributes: false });
+const xmlParser = new XMLParser({ ignoreAttributes: false, htmlEntities: true });
 
 function parsePskReceptionReports(parsed) {
   const getVal = (v) => {
@@ -3023,7 +3023,7 @@ function findDateInItem(it) {
 
 function parseContestsFromRss(xml) {
   if (!xml || typeof xml !== "string" || !xml.includes("<")) return null;
-  const parser = new XMLParser({ ignoreAttributes: false });
+  const parser = new XMLParser({ ignoreAttributes: false, htmlEntities: true });
   let doc;
   try {
     doc = parser.parse(xml.trim());
