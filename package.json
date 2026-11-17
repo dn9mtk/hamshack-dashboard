@@ -4,7 +4,9 @@
   "description": "Real-time ham radio dashboard: spots, space weather, propagation, PSK Reporter, map",
   "author": "Hamshack Dashboard",
   "private": true,
-  "engines": { "node": ">=18.0.0" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npx wait-on http://localhost:8787/api/config -t 30000 && npm run dev:client\"",
@@ -32,15 +34,29 @@
   "build": {
     "appId": "com.hamshack.dashboard",
     "productName": "Hamshack Dashboard",
-    "directories": { "output": "dist-electron" },
+    "directories": {
+      "output": "dist-electron"
+    },
     "files": [
       "electron/**",
       "client/dist/**",
       "server/**"
     ],
     "extraResources": [
-      { "from": "server", "to": "server", "filter": ["**/*"] },
-      { "from": "client/dist", "to": "client/dist", "filter": ["**/*"] }
+      {
+        "from": "server",
+        "to": "server",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "client/dist",
+        "to": "client/dist",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "target": "nsis",

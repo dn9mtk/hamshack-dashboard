@@ -329,6 +329,17 @@ const REPEATER_BAND_COLORS = {
 };
 const REPEATER_DEFAULT_COLOR = "#868e96";
 
+const REPEATER_SIGNAL_RATINGS_KEY = "hamshack_repeater_signals";
+const REPEATER_S_COLORS = {
+  "S1": "#c92a2a", "S2": "#e03131", "S3": "#e67700", "S4": "#f08c00",
+  "S5": "#fab005", "S6": "#ffd43b", "S7": "#94d82d", "S8": "#51cf66",
+  "S9": "#20c997", "S9+": "#15aabf"
+};
+
+function loadRepeaterSignalRatings() {
+  try { return JSON.parse(localStorage.getItem(REPEATER_SIGNAL_RATINGS_KEY)) || {}; } catch { return {}; }
+}
+
 export default function MapPanel({
   dxpeditionsFilter = "all",
   focusedXotaItem,
@@ -830,32 +841,51 @@ export default function MapPanel({
         if (repeatersBandFilter) {
           list = list.filter((x) => x.band === repeatersBandFilter);
         }
+        const signalRatings = loadRepeaterSignalRatings();
         layer.clearLayers();
         list.forEach((x) => {
           const lat = Number(x.lat);
           const lon = Number(x.lon);
-          const color = REPEATER_BAND_COLORS[x.band] || REPEATER_DEFAULT_COLOR;
-          const marker = L.circleMarker([lat, lon], {
-            radius: 5,
-            weight: 2,
-            fillOpacity: 0.9,
-            color,
-            fillColor: color
-          }).addTo(layer);
+          const bandColor = REPEATER_BAND_COLORS[x.band] || REPEATER_DEFAULT_COLOR;
+          const rating = signalRatings[x.callsign];
+          const sColor = rating ? (REPEATER_S_COLORS[rating.signal] || bandColor) : null;
+
+          let marker;
+          if (rating && sColor) {
+            const icon = L.divIcon({
+              className: "repeater-rated-wrap",
+              html: `<div class="repeater-rated-badge" style="background:${sColor};border-color:${sColor};">${escapeHtml(rating.signal)}</div>`,
+              iconSize: [34, 18],
+              iconAnchor: [17, 9]
+            });
+            marker = L.marker([lat, lon], { icon }).addTo(layer);
+          } else {
+            marker = L.circleMarker([lat, lon], {
+              radius: 5,
+              weight: 2,
+              fillOpacity: 0.9,
+              color: bandColor,
+              fillColor: bandColor
+            }).addTo(layer);
+          }
+
           const freqStr = x.freq != null ? `${Number(x.freq).toFixed(2)} MHz` : "—";
           const offsetStr = x.offset != null && x.offset !== "" ? ` · ${x.offset} MHz` : "";
+          const ratingLine = rating
+            ? `<div class="dxped-popup-dates" style="color:${sColor};font-weight:700;">&#9679; ${escapeHtml(rating.signal)}${rating.note ? ` · ${escapeHtml(rating.note)}` : ""} <span style="opacity:0.6;font-weight:400;">(${escapeHtml(rating.date || "")})</span></div>`
+            : "";
           const popupContent =
             `<div class="dxped-popup">` +
             `<div class="dxped-popup-line1">${escapeHtml(x.callsign || "—")}</div>` +
             `<div class="dxped-popup-entity">${escapeHtml(freqStr)}${escapeHtml(offsetStr)}</div>` +
             (x.city ? `<div class="dxped-popup-dates">${escapeHtml(x.city)}</div>` : "") +
             `<div class="dxped-popup-dates">${escapeHtml(x.band || "")}</div>` +
+            ratingLine +
             `</div>`;
           marker.bindPopup(popupContent);
-          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.callsign || "—")}</strong><br/>${escapeHtml(freqStr)}${escapeHtml(offsetStr)} · ${escapeHtml(x.band || "")}${x.city ? `<br/>${escapeHtml(x.city)}` : ""}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
+          const ttSignal = rating ? ` · <span style="color:${sColor};font-weight:700;">${escapeHtml(rating.signal)}</span>` : "";
+          marker.bindTooltip(`<div class="map-marker-tooltip"><strong>${escapeHtml(x.callsign || "—")}</strong>${ttSignal}<br/>${escapeHtml(freqStr)}${escapeHtml(offsetStr)} · ${escapeHtml(x.band || "")}${x.city ? `<br/>${escapeHtml(x.city)}` : ""}</div>`, { direction: "top", sticky: true, className: "map-marker-tooltip-wrap", offset: [0, -8] });
 
-          // When clicking a repeater marker, notify the app so the sidebar
-          // \"Repeater\" panel can select the corresponding entry.
           if (onSelectRepeater) {
             marker.on("click", (ev) => { L.DomEvent.stopPropagation(ev); onSelectRepeater(x); });
           }
@@ -868,9 +898,13 @@ export default function MapPanel({
     if (repeatersLayerOn) {
       refreshRepeaters();
       const id = setInterval(refreshRepeaters, 60 * 60 * 1000);
+      // Refresh immediately when user saves a signal rating in the panel
+      const onRatingChange = () => refreshRepeaters();
+      window.addEventListener("repeaterSignalRatingChanged", onRatingChange);
       return () => {
         alive = false;
         clearInterval(id);
+        window.removeEventListener("repeaterSignalRatingChanged", onRatingChange);
       };
     }
     return () => { alive = false; };
@@ -1516,13 +1550,12 @@ export default function MapPanel({
       })
       .catch((err) => console.warn("Failed to load beacons:", err));
 
-    // Night shading
-    const night = L.polygon(nightPolygons(new Date(), 1), {
-      stroke: false,
-      fill: true,
-      fillOpacity: 0.22
-    }).addTo(map);
-    nightRef.current = night;
+    // Night shading – nightPolygons can return multiple rings (one per dateline segment).
+    // Use a layerGroup so each ring is its own L.polygon (avoids the second ring being a hole).
+    const nightOpts = { stroke: false, fill: true, fillOpacity: 0.22 };
+    const nightGroup = L.layerGroup().addTo(map);
+    nightPolygons(new Date(), 1).forEach((ring) => L.polygon([ring], nightOpts).addTo(nightGroup));
+    nightRef.current = nightGroup;
 
     // Greyline (Tag/Nacht-Grenze)
     const grey = L.polyline(terminatorSegments(new Date(), 1), {
@@ -1590,7 +1623,10 @@ export default function MapPanel({
 
       const tid = setInterval(() => {
         if (nightRef.current && greyRef.current) {
-          nightRef.current.setLatLngs(nightPolygons(new Date(), 1));
+          nightRef.current.clearLayers();
+          nightPolygons(new Date(), 1).forEach((ring) =>
+            L.polygon([ring], { stroke: false, fill: true, fillOpacity: 0.22 }).addTo(nightRef.current)
+          );
           greyRef.current.setLatLngs(terminatorSegments(new Date(), 1));
         }
       }, 60_000);
@@ -1702,7 +1738,7 @@ export default function MapPanel({
     const map = mapRef.current;
     if (!map || !mapReady) return;
 
-    const bandFreq = mapView !== "none" && mapView !== "MUF" && mapView !== "LUF" ? parseFloat(mapView, 10) : null;
+    const bandFreq = mapView !== "none" && mapView !== "MUF" && mapView !== "LUF" ? parseFloat(mapView) : null;
     if (!Number.isFinite(bandFreq)) {
       setBandGridSource(null);
       if (bandOverlayRef.current) {
@@ -2180,16 +2216,20 @@ export default function MapPanel({
       marker.bindTooltip(`${q.callsign || "QTH"} · ${q.locator || ""}`, { direction: "top" });
       qthMarkerRef.current = marker;
     };
+    let alive = true;
     fetch("/api/qth")
       .then((r) => (r.ok ? r.json() : null))
       .then((q) => {
+        if (!alive) return;
         if (!q || !Number.isFinite(q.lat) || !Number.isFinite(q.lon)) return;
         placeMarker(q);
       })
       .catch(() => {
+        if (!alive) return;
         placeMarker({ callsign: "QTH", locator: "" });
       });
     return () => {
+      alive = false;
       if (qthMarkerRef.current && map.hasLayer(qthMarkerRef.current)) {
         map.removeLayer(qthMarkerRef.current);
       }

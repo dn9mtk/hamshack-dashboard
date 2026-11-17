@@ -1060,6 +1060,25 @@
   .aircraft-list-card {
     flex-shrink: 0;
   }
+  .repeater-rated-wrap {
+    background: transparent !important;
+    border: none !important;
+  }
+  .repeater-rated-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 5px;
+    border-radius: 9px;
+    border: 2px solid;
+    font-size: 10px;
+    font-weight: 800;
+    color: rgba(0, 0, 0, 0.85);
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    line-height: 1.3;
+    cursor: pointer;
+  }
   .repeaters-coverage-dot {
     width: 8px;
     height: 8px;

@@ -6,6 +6,35 @@ const REPEATERBOOK_URL = "https://www.repeaterbook.com/";
 const COVERAGE_POWER_KEY = "hamshack_repeater_power";
 const COVERAGE_GAIN_KEY = "hamshack_repeater_gain";
 const COVERAGE_MAST_KEY = "hamshack_repeater_mast";
+const SIGNAL_RATINGS_KEY = "hamshack_repeater_signals";
+
+// S-meter levels with display labels and colors
+const S_LEVELS = [
+  { value: "S1", color: "#c92a2a" },
+  { value: "S2", color: "#e03131" },
+  { value: "S3", color: "#e67700" },
+  { value: "S4", color: "#f08c00" },
+  { value: "S5", color: "#fab005" },
+  { value: "S6", color: "#ffd43b" },
+  { value: "S7", color: "#94d82d" },
+  { value: "S8", color: "#51cf66" },
+  { value: "S9", color: "#20c997" },
+  { value: "S9+", color: "#15aabf" },
+];
+
+function sLevelColor(value) {
+  return S_LEVELS.find((s) => s.value === value)?.color ?? "#868e96";
+}
+
+function loadSignalRatings() {
+  try {
+    return JSON.parse(localStorage.getItem(SIGNAL_RATINGS_KEY)) || {};
+  } catch { return {}; }
+}
+
+function saveSignalRatings(ratings) {
+  try { localStorage.setItem(SIGNAL_RATINGS_KEY, JSON.stringify(ratings)); } catch {}
+}
 
 function loadCoveragePower() {
   try {
@@ -64,6 +93,8 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
   const [query, setQuery] = useState("");
   const [reachability, setReachability] = useState(null);
   const [pathData, setPathData] = useState(null);
+  const [signalRatings, setSignalRatings] = useState(loadSignalRatings);
+  const [ratingNote, setRatingNote] = useState("");
   const [powerW, setPowerW] = useState(loadCoveragePower);
   const [gainDbi, setGainDbi] = useState(loadCoverageGain);
   const [mastM, setMastM] = useState(loadCoverageMast);
@@ -152,6 +183,48 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
     });
   }, [selectedRepeater, items]);
 
+  function notifyMap() {
+    window.dispatchEvent(new Event("repeaterSignalRatingChanged"));
+  }
+
+  function setSignal(callsign, value) {
+    setSignalRatings((prev) => {
+      const next = {
+        ...prev,
+        [callsign]: {
+          signal: value,
+          note: prev[callsign]?.note ?? "",
+          date: new Date().toISOString().slice(0, 10)
+        }
+      };
+      saveSignalRatings(next);
+      return next;
+    });
+    notifyMap();
+  }
+
+  function clearSignal(callsign) {
+    setSignalRatings((prev) => {
+      const next = { ...prev };
+      delete next[callsign];
+      saveSignalRatings(next);
+      return next;
+    });
+    setRatingNote("");
+    notifyMap();
+  }
+
+  function saveNote(callsign, note) {
+    setSignalRatings((prev) => {
+      const existing = prev[callsign];
+      if (!existing) return prev;
+      const next = { ...prev, [callsign]: { ...existing, note } };
+      saveSignalRatings(next);
+      return next;
+    });
+    notifyMap();
+  }
+
   const go = useCallback((delta) => {
     setIndex((i) => {
       if (filteredItems.length <= 1) return i;
@@ -164,6 +237,14 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
   }, [band, filteredItems.length]);
 
   const currentRepeater = filteredItems[index];
+
+  // Sync note field when displayed repeater changes
+  const currentKey = currentRepeater?.callsign ?? null;
+  useEffect(() => {
+    const note = currentKey ? (signalRatings[currentKey]?.note ?? "") : "";
+    setRatingNote(note);
+  }, [currentKey]);
+
   const repFreq = currentRepeater?.freq != null ? Number(currentRepeater.freq) : null;
   const repOffset = currentRepeater?.offset != null ? Number(currentRepeater.offset) : 0;
   const inputFreq = repFreq != null && Number.isFinite(repFreq) ? repFreq - repOffset : null;
@@ -368,6 +449,77 @@ export default function RepeatersPanel({ band: bandProp, onBandChange, selectedR
             <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span className="repeaters-coverage-dot" style={{ background: "#ff922b" }} />weak</span>
             <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span className="repeaters-coverage-dot" style={{ background: "#ff6b6b" }} />poor</span>
           </p>
+        </div>
+      )}
+      {/* Manual signal strength rating */}
+      {r && (
+        <div style={{ marginTop: 10, padding: "8px 10px", background: "rgba(255,255,255,0.05)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.7)" }}>Eigene Empfangsstärke</span>
+            {signalRatings[r.callsign] && (
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: sLevelColor(signalRatings[r.callsign].signal) }}>
+                  {signalRatings[r.callsign].signal}
+                </span>
+                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)" }}>{signalRatings[r.callsign].date}</span>
+                <button
+                  type="button"
+                  onClick={() => clearSignal(r.callsign)}
+                  title="Bewertung löschen"
+                  style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 13, padding: "0 2px", lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {S_LEVELS.map(({ value, color }) => {
+              const active = signalRatings[r.callsign]?.signal === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setSignal(r.callsign, value)}
+                  title={`Signal: ${value}`}
+                  aria-pressed={active}
+                  style={{
+                    padding: "3px 7px",
+                    borderRadius: 5,
+                    border: `1px solid ${active ? color : "rgba(255,255,255,0.2)"}`,
+                    background: active ? `${color}33` : "rgba(255,255,255,0.05)",
+                    color: active ? color : "rgba(255,255,255,0.65)",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    fontWeight: active ? 700 : 400
+                  }}
+                >
+                  {value}
+                </button>
+              );
+            })}
+          </div>
+          {signalRatings[r.callsign] && (
+            <input
+              type="text"
+              placeholder="Notiz (z.B. Richtung, Antenne, QRM…)"
+              value={ratingNote}
+              maxLength={80}
+              onChange={(e) => setRatingNote(e.target.value)}
+              onBlur={() => saveNote(r.callsign, ratingNote)}
+              style={{
+                marginTop: 6,
+                width: "100%",
+                padding: "4px 8px",
+                borderRadius: 5,
+                border: "1px solid rgba(255,255,255,0.15)",
+                background: "rgba(0,0,0,0.2)",
+                color: "rgba(255,255,255,0.85)",
+                fontSize: 11,
+                boxSizing: "border-box"
+              }}
+            />
+          )}
         </div>
       )}
       <span className="news-slider-hint" style={{ marginTop: 6 }}>Repeater Deutschland · Karte: Repeater-Layer einschalten</span>
